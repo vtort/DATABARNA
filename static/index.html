@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+  <meta charset="UTF-8">
+  <title>BCN Live</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0a; color: #fff; font-family: -apple-system, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+    #topbar { display: flex; align-items: center; gap: 24px; padding: 12px 20px; background: #111; border-bottom: 1px solid #222; flex-shrink: 0; }
+    #topbar h1 { font-size: 14px; font-weight: 700; letter-spacing: 0.1em; }
+    .stat { display: flex; flex-direction: column; gap: 2px; }
+    .stat-label { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-value { font-size: 15px; font-weight: 700; }
+    #updated { margin-left: auto; font-size: 11px; color: #444; }
+    #map { flex: 1; }
+    #layers { position: absolute; top: 70px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
+    .layer-btn { padding: 8px 14px; border-radius: 8px; border: 1px solid #333; background: #111; color: #888; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.15s; }
+    .layer-btn.active { background: #1a1a1a; color: #fff; border-color: #555; }
+    .layer-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    #tooltip { position: absolute; pointer-events: none; background: #111; border: 1px solid #333; border-radius: 8px; padding: 10px 14px; font-size: 12px; line-height: 1.6; max-width: 240px; z-index: 20; display: none; }
+    #tooltip strong { font-size: 13px; display: block; margin-bottom: 4px; }
+    .metro-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; margin-right: 3px; }
+    .metro-popup { font-family: -apple-system, sans-serif; color: #fff; background: #111; border-radius: 10px; padding: 14px 16px; min-width: 220px; }
+    .metro-popup h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
+    .metro-popup .direction { margin-bottom: 10px; }
+    .metro-popup .dir-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .metro-popup .dir-dest { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+    .metro-popup .train { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; margin-bottom: 2px; }
+    .metro-popup .train .time { color: #fff; }
+    .metro-popup .train .real { color: #22c55e; font-size: 9px; font-weight: 600; }
+    .metro-popup .train .teorico { color: #555; font-size: 9px; }
+    .metro-popup .loading { color: #555; font-size: 12px; }
+    .mapboxgl-popup-content { background: #111 !important; border: 1px solid #333 !important; border-radius: 10px !important; padding: 0 !important; box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important; }
+    .mapboxgl-popup-tip { border-top-color: #333 !important; }
+    #ships-panel { position: absolute; top: 60px; left: 16px; background: #111; border: 1px solid #333; border-radius: 10px; padding: 14px 16px; z-index: 20; display: none; max-height: 70vh; overflow-y: auto; min-width: 280px; }
+    #ships-panel h3 { font-size: 13px; font-weight: 700; margin-bottom: 10px; color: #fff; }
+    .ship-row { border-bottom: 1px solid #1e1e1e; padding: 8px 0; font-size: 12px; }
+    .ship-row:last-child { border-bottom: none; }
+    .ship-name { font-weight: 700; color: #fff; }
+    .ship-detail { color: #555; font-size: 11px; margin-top: 2px; }
+  </style>
+</head>
+<body>
+<div id="topbar">
+  <h1>BCN LIVE</h1>
+  <div class="stat"><span class="stat-label">Congestió</span><span class="stat-value" id="s-congestion">—</span></div>
+  <div class="stat"><span class="stat-label">Bicis</span><span class="stat-value" id="s-bikes">—</span></div>
+  <div class="stat"><span class="stat-label">Elèctric</span><span class="stat-value" id="s-electric">—</span></div>
+  <div class="stat"><span class="stat-label">NO₂ avg</span><span class="stat-value" id="s-no2">—</span></div>
+  <div class="stat"><span class="stat-label">Temp</span><span class="stat-value" id="s-temp">—</span></div>
+  <div class="stat"><span class="stat-label">Vent</span><span class="stat-value" id="s-wind">—</span></div>
+  <div class="stat"><span class="stat-label">Pluja</span><span class="stat-value" id="s-rain">—</span></div>
+  <div class="stat"><span class="stat-label">Vaixells</span><span class="stat-value" id="s-ships">—</span></div>
+  <span id="updated">—</span>
+</div>
+<div id="map"></div>
+<div id="layers">
+  <button class="layer-btn active" onclick="toggleLayer('traffic',this)"><span class="layer-dot" style="background:#ef4444"></span>Trànsit</button>
+  <button class="layer-btn active" onclick="toggleLayer('bicing',this)"><span class="layer-dot" style="background:#3b82f6"></span>Bicing</button>
+  <button class="layer-btn active" onclick="toggleLayer('metro',this)"><span class="layer-dot" style="background:#a855f7"></span>Metro</button>
+  <button class="layer-btn" onclick="toggleLayer('bus',this)"><span class="layer-dot" style="background:#f59e0b"></span>Bus</button>
+  <button class="layer-btn active" onclick="toggleLayer('flights',this)"><span class="layer-dot" style="background:#e2e8f0"></span>Vols</button>
+  <button class="layer-btn active" onclick="toggleLayer('trains',this)"><span class="layer-dot" style="background:#f87171"></span>Rodalies</button>
+  <button class="layer-btn" onclick="toggleLayer('beaches',this)"><span class="layer-dot" style="background:#38bdf8"></span>Platges</button>
+  <button class="layer-btn active" onclick="toggleLayer('obras',this)"><span class="layer-dot" style="background:#fb923c"></span>Obres</button>
+  <button class="layer-btn active" onclick="toggleLayer('ships',this)"><span class="layer-dot" style="background:#94a3b8"></span>Port ⚓</button>
+  <button class="layer-btn" onclick="toggleLayer('air',this)"><span class="layer-dot" style="background:#22c55e"></span>Aire</button>
+</div>
+<div id="tooltip"></div>
+<div id="ships-panel"><h3>⚓ Vaixells al Port</h3><div id="ships-list"><span style="color:#555">Carregant…</span></div></div>
+<script>
+const API=window.location.hostname==='192.168.1.34'?'http://192.168.1.34:8001':'';
+let map;
+const tooltip=document.getElementById('tooltip');
+const layerState={traffic:true,bicing:true,metro:true,air:false,flights:true,trains:true,bus:false,ships:true,beaches:false,obras:true};
+
+(async()=>{
+  const cfg=await(await fetch(`${API}/api/config`)).json();
+  mapboxgl.accessToken=cfg.mapbox_token;
+  map=new mapboxgl.Map({container:'map',style:'mapbox://styles/mapbox/dark-v11',center:[2.1734,41.3851],zoom:12});
+
+map.on('load',()=>{
+  // ── Trànsit ──
+  map.addSource('traffic',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'traffic-lines',type:'line',source:'traffic',layout:{'line-join':'round','line-cap':'round'},paint:{
+    'line-color':['match',['get','estado'],0,'#333',1,'#22c55e',2,'#84cc16',3,'#eab308',4,'#f97316',5,'#ef4444','#333'],
+    'line-width':['match',['get','estado'],0,1,1,2,2,2,3,3,4,4,5,5,2],
+    'line-opacity':0.85
+  }});
+
+  // ── Bicing ──
+  map.addSource('bicing',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'bicing-circles',type:'circle',source:'bicing',paint:{
+    'circle-radius':['interpolate',['linear'],['get','bikes'],0,4,20,12],
+    'circle-color':['case',['==',['get','bikes'],0],'#374151',['<',['get','bikes'],3],'#f59e0b','#3b82f6'],
+    'circle-opacity':0.85,'circle-stroke-width':1,'circle-stroke-color':'#1e3a5f'
+  }});
+  map.addLayer({id:'bicing-labels',type:'symbol',source:'bicing',
+    layout:{'text-field':['get','bikes'],'text-size':10,'text-font':['DIN Offc Pro Bold','Arial Unicode MS Bold']},
+    paint:{'text-color':'#fff'},minzoom:13});
+
+  // ── Metro ──
+  map.addSource('metro',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'metro-circles',type:'circle',source:'metro',paint:{
+    'circle-radius':['interpolate',['linear'],['zoom'],11,5,15,10],
+    'circle-color':['get','color'],
+    'circle-opacity':0.95,
+    'circle-stroke-width':2,
+    'circle-stroke-color':'#fff',
+  }});
+  map.addLayer({id:'metro-labels',type:'symbol',source:'metro',
+    layout:{
+      'text-field':['get','name'],
+      'text-size':11,
+      'text-font':['DIN Offc Pro Medium','Arial Unicode MS Regular'],
+      'text-offset':[0,1.2],
+      'text-anchor':'top',
+    },
+    paint:{'text-color':'#ccc','text-halo-color':'#000','text-halo-width':1},
+    minzoom:13});
+
+  // ── Vuelos ──
+  map.addSource('flights',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'flights-symbols',type:'symbol',source:'flights',layout:{
+    'text-field':'✈',
+    'text-size':18,
+    'text-rotate':['get','heading'],
+    'text-rotation-alignment':'map',
+    'text-allow-overlap':true,
+    'text-ignore-placement':true,
+  },paint:{
+    'text-color':'#e2e8f0',
+    'text-halo-color':'#000',
+    'text-halo-width':1,
+  }});
+  map.addLayer({id:'flights-labels',type:'symbol',source:'flights',layout:{
+    'text-field':['get','callsign'],
+    'text-size':10,
+    'text-offset':[0,1.4],
+    'text-anchor':'top',
+    'text-font':['DIN Offc Pro Medium','Arial Unicode MS Regular'],
+    'text-allow-overlap':false,
+  },paint:{
+    'text-color':'#94a3b8',
+    'text-halo-color':'#000',
+    'text-halo-width':1,
+  },minzoom:10});
+
+  // ── Barcos Port ──
+  map.addSource('ships',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'ships-circles',type:'circle',source:'ships',paint:{
+    'circle-radius':6,
+    'circle-color':'#94a3b8',
+    'circle-opacity':0.9,
+    'circle-stroke-width':1.5,
+    'circle-stroke-color':'#fff',
+  }});
+  map.addLayer({id:'ships-labels',type:'symbol',source:'ships',layout:{
+    'text-field':['get','name'],
+    'text-size':10,
+    'text-offset':[0,1.2],
+    'text-anchor':'top',
+    'text-font':['DIN Offc Pro Medium','Arial Unicode MS Regular'],
+    'text-allow-overlap':false,
+  },paint:{'text-color':'#94a3b8','text-halo-color':'#000','text-halo-width':1},minzoom:13});
+
+  // ── Rodalies Renfe ──
+  map.addSource('trains',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'trains-circles',type:'circle',source:'trains',paint:{
+    'circle-radius':7,
+    'circle-color':'#f87171',
+    'circle-opacity':0.95,
+    'circle-stroke-width':2,
+    'circle-stroke-color':'#fff',
+  }});
+  map.addLayer({id:'trains-labels',type:'symbol',source:'trains',layout:{
+    'text-field':['get','label'],
+    'text-size':10,
+    'text-offset':[0,1.3],
+    'text-anchor':'top',
+    'text-font':['DIN Offc Pro Medium','Arial Unicode MS Regular'],
+    'text-allow-overlap':false,
+  },paint:{'text-color':'#f87171','text-halo-color':'#000','text-halo-width':1},minzoom:11});
+
+  // ── Obres ──
+  map.addSource('obras',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'obras-circles',type:'circle',source:'obras',paint:{
+    'circle-radius':6,
+    'circle-color':['match',['get','estat'],'En execució','#fb923c','Aturada','#6b7280','#fb923c'],
+    'circle-opacity':0.85,
+    'circle-stroke-width':1.5,
+    'circle-stroke-color':'#fff',
+  }});
+  map.addLayer({id:'obras-labels',type:'symbol',source:'obras',layout:{
+    'text-field':['get','ubicacio'],
+    'text-size':10,
+    'text-offset':[0,1.2],
+    'text-anchor':'top',
+    'text-font':['DIN Offc Pro Medium','Arial Unicode MS Regular'],
+    'text-allow-overlap':false,
+  },paint:{'text-color':'#fb923c','text-halo-color':'#000','text-halo-width':1},minzoom:14});
+
+  // ── Platges ──
+  map.addSource('beaches',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'beaches-circles',type:'circle',source:'beaches',layout:{visibility:'none'},paint:{
+    'circle-radius':10,
+    'circle-color':['match',['get','flag'],'VERDA','#22c55e','GROGA','#eab308','VERMELLA','#ef4444','TANCADA','#374151','#6b7280'],
+    'circle-opacity':0.9,'circle-stroke-width':2,'circle-stroke-color':'#fff',
+  }});
+
+  // ── Bus stops ──
+  map.addSource('bus',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'bus-circles',type:'circle',source:'bus',layout:{visibility:'none'},paint:{
+    'circle-radius':['interpolate',['linear'],['zoom'],12,3,16,7],
+    'circle-color':'#f59e0b',
+    'circle-opacity':0.85,
+    'circle-stroke-width':1,
+    'circle-stroke-color':'#92400e'
+  }});
+
+  // ── Aire heatmap ──
+  map.addSource('air',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'air-heat',type:'heatmap',source:'air',layout:{visibility:'none'},paint:{
+    'heatmap-weight':['interpolate',['linear'],['get','no2'],0,0,80,1],
+    'heatmap-intensity':0.6,'heatmap-radius':60,
+    'heatmap-color':['interpolate',['linear'],['heatmap-density'],0,'rgba(0,0,0,0)',0.2,'rgba(34,197,94,0.4)',0.5,'rgba(234,179,8,0.5)',0.8,'rgba(249,115,22,0.6)',1,'rgba(239,68,68,0.7)']
+  }});
+
+  // ── Tooltips ──
+  map.on('mousemove','traffic-lines',e=>{const p=e.features[0].properties;showTooltip(e,`<strong>${p.description}</strong>${p.estado_label} · predicció: ${p.prediccion_label}`);});
+  map.on('mouseleave','traffic-lines',hideTooltip);
+  map.on('mousemove','bicing-circles',e=>{const p=e.features[0].properties;showTooltip(e,`<strong>${p.name}</strong>${p.bikes} bicis (${p.bikes_electric} elèc.) · ${p.slots_free} slots lliures`);});
+  map.on('mouseleave','bicing-circles',hideTooltip);
+  // ── Obras popup ──
+  map.on('click','obras-circles',e=>{
+    const p=e.features[0].properties;
+    const color=p.estat==='En execució'?'#fb923c':'#6b7280';
+    new mapboxgl.Popup({closeButton:true,maxWidth:'280px'})
+      .setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(`<div class="metro-popup">
+        <h3 style="color:${color}">🚧 ${p.ubicacio}</h3>
+        <div class="direction">
+          <div class="dir-dest" style="font-size:12px;margin-bottom:8px">${p.titol||''}</div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Tipus</span><span class="time" style="margin-left:auto">${p.tipus||'—'}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Estat</span><span class="time" style="margin-left:auto;color:${color}">${p.estat}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Inici</span><span class="time" style="margin-left:auto">${p.data_inici||'—'}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Fi</span><span class="time" style="margin-left:auto">${p.data_fi||'—'}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Promotor</span><span class="time" style="margin-left:auto;font-size:10px">${(p.promotor||'—').substring(0,22)}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Barri</span><span class="time" style="margin-left:auto">${p.barri||'—'}</span></div>
+        </div>
+      </div>`)
+      .addTo(map);
+  });
+  map.on('mouseenter','obras-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','obras-circles',()=>map.getCanvas().style.cursor='');
+
+  // ── Ships popup ──
+  let shipPopup = null;
+  map.on('click','ships-circles',e=>{
+    const p=e.features[0].properties;
+    const lngLat=e.features[0].geometry.coordinates;
+    if(shipPopup) shipPopup.remove();
+    shipPopup=new mapboxgl.Popup({closeButton:true,maxWidth:'260px'})
+      .setLngLat(lngLat)
+      .setHTML(`<div class="metro-popup">
+        <h3>⚓ ${p.name}</h3>
+        <div class="direction">
+          <div class="train"><span style="color:#94a3b8;font-size:11px">País</span><span class="time" style="margin-left:auto">${p.country}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Moll</span><span class="time" style="margin-left:auto">${p.berth}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">ETD</span><span class="time" style="margin-left:auto">${p.etd?p.etd.substring(11,16):'—'}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Operador</span><span class="time" style="margin-left:auto;font-size:10px">${p.operator?p.operator.substring(0,22):'—'}</span></div>
+        </div>
+      </div>`)
+      .addTo(map);
+  });
+  map.on('mouseenter','ships-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','ships-circles',()=>map.getCanvas().style.cursor='');
+
+  // ── Trains tooltip ──
+  map.on('mousemove','trains-circles',e=>{
+    const p=e.features[0].properties;
+    const status={'IN_TRANSIT_TO':'En marxa','STOPPED_AT':'Aturat','INCOMING_AT':'Arribant'}[p.status]||p.status;
+    showTooltip(e,`<strong>${p.label}</strong>${status}`);
+  });
+  map.on('mouseleave','trains-circles',hideTooltip);
+  map.on('mouseenter','trains-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','trains-circles',()=>map.getCanvas().style.cursor='');
+
+  // ── Beaches popup ──
+  map.on('click','beaches-circles',e=>{
+    const p=e.features[0].properties;
+    const flagColor={'VERDA':'#22c55e','GROGA':'#eab308','VERMELLA':'#ef4444','TANCADA':'#374151'}[p.flag]||'#888';
+    const jelly=p.jellyfish?'⚠️ Meduses':'';
+    new mapboxgl.Popup({closeButton:true,maxWidth:'240px'})
+      .setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(`<div class="metro-popup">
+        <h3>🏖 ${p.name}</h3>
+        <div class="direction">
+          <div class="train"><span style="background:${flagColor};width:12px;height:12px;border-radius:50%;display:inline-block"></span><span class="time" style="margin-left:8px">Bandera ${p.flag.toLowerCase()}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Estat</span><span class="time" style="margin-left:auto">${p.water_state||'—'}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Aspecte</span><span class="time" style="margin-left:auto">${p.water_aspect||'—'}</span></div>
+          ${jelly?`<div style="color:#f59e0b;margin-top:6px;font-size:12px">${jelly}</div>`:''}
+        </div>
+      </div>`)
+      .addTo(map);
+  });
+  map.on('mouseenter','beaches-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','beaches-circles',()=>map.getCanvas().style.cursor='');
+
+  // ── Flights popup ──
+  let flightPopup = null;
+  map.on('click','flights-symbols',e=>{
+    const p=e.features[0].properties;
+    const lngLat=e.features[0].geometry.coordinates;
+    if(flightPopup) flightPopup.remove();
+    const vr=p.vertical_rate>1?'↑ pujant':p.vertical_rate<-1?'↓ baixant':'→ creuer';
+    flightPopup=new mapboxgl.Popup({closeButton:true,maxWidth:'240px'})
+      .setLngLat(lngLat)
+      .setHTML(`<div class="metro-popup">
+        <h3>✈ ${p.callsign}</h3>
+        <div class="direction">
+          <div class="train"><span style="color:#94a3b8;font-size:11px;font-weight:400">Altitud</span><span class="time" style="margin-left:auto">${p.altitude_ft ? p.altitude_ft.toLocaleString()+' ft' : '—'}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px;font-weight:400">Velocitat</span><span class="time" style="margin-left:auto">${p.velocity_kmh ? p.velocity_kmh+' km/h' : '—'}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px;font-weight:400">Rumb</span><span class="time" style="margin-left:auto">${p.heading ? Math.round(p.heading)+'°' : '—'}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px;font-weight:400">Estat</span><span class="time" style="margin-left:auto">${vr}</span></div>
+          <div class="train"><span style="color:#94a3b8;font-size:11px;font-weight:400">País</span><span class="time" style="margin-left:auto">${p.country}</span></div>
+        </div>
+      </div>`)
+      .addTo(map);
+  });
+  map.on('mouseenter','flights-symbols',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','flights-symbols',()=>map.getCanvas().style.cursor='');
+
+  // ── Bus popup ──
+  let busPopup = null;
+  map.on('click','bus-circles',async e=>{
+    const p=e.features[0].properties;
+    const lngLat=e.features[0].geometry.coordinates;
+    if(busPopup) busPopup.remove();
+    busPopup=new mapboxgl.Popup({closeButton:true,maxWidth:'280px'})
+      .setLngLat(lngLat)
+      .setHTML(`<div class="metro-popup"><h3>🚌 ${p.name}</h3><p class="loading">Carregant…</p></div>`)
+      .addTo(map);
+    try{
+      const d=await(await fetch(`${API}/api/buses/${p.stop_id}`)).json();
+      const buses=d.buses;
+      let html=`<div class="metro-popup"><h3>🚌 ${p.name}</h3>`;
+      if(!buses.length){html+='<p class="loading">Sense serveis ara</p>';}
+      else{
+        for(const b of buses.slice(0,5)){
+          const min=b['t-in-min'];
+          const label=min<=0?'Ara':min===1?'1 min':`${min} min`;
+          html+=`<div class="train"><span style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:700">${b.line}</span><span class="time" style="margin-left:4px">${label}</span><span style="color:#555;font-size:11px;margin-left:4px">→ ${b.destination}</span></div>`;
+        }
+      }
+      html+=`<div style="font-size:10px;color:#444;margin-top:8px">Parada #${p.stop_id}</div></div>`;
+      busPopup.setHTML(html);
+    }catch(err){busPopup.setHTML(`<div class="metro-popup"><h3>🚌 ${p.name}</h3><p class="loading">Error</p></div>`);}
+  });
+  map.on('mouseenter','bus-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','bus-circles',()=>map.getCanvas().style.cursor='');
+
+  let metroPopup = null;
+  map.on('click','metro-circles',async e=>{
+    const p=e.features[0].properties;
+    const lngLat=e.features[0].geometry.coordinates;
+    if(metroPopup) metroPopup.remove();
+    const lines=p.lines.split(',').map(l=>`<span class="metro-badge" style="background:${p.color};color:#fff">${l.trim()}</span>`).join('');
+    metroPopup=new mapboxgl.Popup({closeButton:true,maxWidth:'280px'})
+      .setLngLat(lngLat)
+      .setHTML(`<div class="metro-popup"><h3>${p.name} ${lines}</h3><p class="loading">Carregant horaris…</p></div>`)
+      .addTo(map);
+    try{
+      const d=await(await fetch(`${API}/api/metro/arrivals/${p.id}`)).json();
+      let html=`<div class="metro-popup"><h3>${p.name} ${lines}</h3>`;
+      for(const a of d.arrivals){
+        const trens=a.propers_trens.slice(0,3).map(t=>{
+          const min=Math.floor(t.wait_s/60), sec=t.wait_s%60;
+          const label=min>0?`${min}min`:`${sec}s`;
+          const badge=t.is_real?`<span class="real">● LIVE</span>`:`<span class="teorico">~ teòric</span>`;
+          return `<div class="train"><span class="time">${label}</span>${badge}</div>`;
+        }).join('');
+        html+=`<div class="direction"><div class="dir-label">direcció</div><div class="dir-dest">→ ${a.desti}</div>${trens}</div>`;
+      }
+      html+='</div>';
+      metroPopup.setHTML(html);
+    }catch(err){metroPopup.setHTML(`<div class="metro-popup"><h3>${p.name}</h3><p class="loading">Error carregant horaris</p></div>`);}
+  });
+
+  ['traffic-lines','bicing-circles','metro-circles'].forEach(l=>{
+    map.on('mouseenter',l,()=>map.getCanvas().style.cursor='pointer');
+    map.on('mouseleave',l,()=>map.getCanvas().style.cursor='');
+  });
+
+  fetchAll();
+  setInterval(fetchAll,60000);
+});
+})();
+
+async function fetchAll(){
+  await Promise.all([fetchTraffic(),fetchBicing(),fetchAir(),fetchMetro(),fetchBus(),fetchFlights(),fetchTrains(),fetchWeather(),fetchShips(),fetchBeaches(),fetchObras(),fetchSnapshot()]);
+  setInterval(fetchFlights,15000);
+  setInterval(fetchTrains,20000);
+  document.getElementById('updated').textContent='actualitzat '+new Date().toLocaleTimeString('ca');
+}
+async function fetchTraffic(){const r=await fetch(`${API}/api/trams?geojson=true`);map.getSource('traffic').setData(await r.json());}
+async function fetchBicing(){
+  const{stations}=await(await fetch(`${API}/api/bicing`)).json();
+  map.getSource('bicing').setData({type:'FeatureCollection',features:stations.map(s=>({type:'Feature',properties:{name:s.name,bikes:s.bikes,bikes_electric:s.bikes_electric,slots_free:s.slots_free},geometry:{type:'Point',coordinates:[s.lon,s.lat]}}))});
+}
+async function fetchWeather(){
+  const d=await(await fetch(`${API}/api/weather`)).json();
+  const windDir=['N','NE','E','SE','S','SO','O','NO'][Math.round(d.wind_direction/45)%8];
+  document.getElementById('s-temp').textContent=d.temperature+'°C';
+  document.getElementById('s-wind').textContent=`${d.wind_speed_kmh} km/h ${windDir}`;
+  document.getElementById('s-rain').textContent=d.precipitation>0?`${d.precipitation}mm`:'0 mm';
+}
+async function fetchObras(){
+  const data=await(await fetch(`${API}/api/obras?geojson=true`)).json();
+  map.getSource('obras').setData(data);
+}
+async function fetchShips(){
+  const d=await(await fetch(`${API}/api/ships`)).json();
+  document.getElementById('s-ships').textContent=d.total;
+  const list=document.getElementById('ships-list');
+  list.innerHTML=d.ships.map(s=>`
+    <div class="ship-row">
+      <div class="ship-name">${s.name}</div>
+      <div class="ship-detail">${s.country} · ${s.operator.substring(0,30)}</div>
+      <div class="ship-detail">ETD: ${s.etd.substring(11,16)||'—'} · Moll: ${s.berth||'—'}</div>
+    </div>`).join('');
+  const geo=await(await fetch(`${API}/api/ships?geojson=true`)).json();
+  map.getSource('ships').setData(geo);
+}
+async function fetchTrains(){
+  const data=await(await fetch(`${API}/api/trains?geojson=true`)).json();
+  map.getSource('trains').setData(data);
+}
+async function fetchBeaches(){
+  const{beaches}=await(await fetch(`${API}/api/beaches`)).json();
+  const features=beaches.filter(b=>b.coords).map(b=>({
+    type:'Feature',
+    properties:{...b,name:b.name||b.id.split('.').pop().replace(/_/g,' ')},
+    geometry:{type:'Point',coordinates:b.coords}
+  }));
+  map.getSource('beaches').setData({type:'FeatureCollection',features});
+}
+async function fetchFlights(){
+  const data=await(await fetch(`${API}/api/flights?geojson=true`)).json();
+  map.getSource('flights').setData(data);
+}
+async function fetchBus(){
+  const data=await(await fetch(`${API}/api/buses/stops?geojson=true`)).json();
+  map.getSource('bus').setData(data);
+}
+async function fetchMetro(){
+  const data=await(await fetch(`${API}/api/metro/stations?geojson=true`)).json();
+  map.getSource('metro').setData(data);
+}
+async function fetchAir(){
+  const{stations}=await(await fetch(`${API}/api/air`)).json();
+  map.getSource('air').setData({type:'FeatureCollection',features:stations.map(s=>({type:'Feature',properties:{no2:s.pollutants?.NO2?.value??0,name:s.name},geometry:{type:'Point',coordinates:[s.lon,s.lat]}}))});
+}
+async function fetchSnapshot(){
+  const d=await(await fetch(`${API}/api/snapshot`)).json();
+  document.getElementById('s-congestion').textContent=d.traffic.congestion_index.toFixed(2);
+  document.getElementById('s-bikes').textContent=d.bicing.bikes_available.toLocaleString();
+  document.getElementById('s-electric').textContent=d.bicing.bikes_electric;
+  const ci=d.traffic.congestion_index;
+  document.getElementById('s-congestion').style.color=ci<2?'#22c55e':ci<3?'#eab308':ci<4?'#f97316':'#ef4444';
+}
+function toggleLayer(layer,btn){
+  layerState[layer]=!layerState[layer];
+  btn.classList.toggle('active');
+  const vis=layerState[layer]?'visible':'none';
+  if(layer==='traffic')map.setLayoutProperty('traffic-lines','visibility',vis);
+  if(layer==='bicing'){map.setLayoutProperty('bicing-circles','visibility',vis);map.setLayoutProperty('bicing-labels','visibility',vis);}
+  if(layer==='metro'){map.setLayoutProperty('metro-circles','visibility',vis);map.setLayoutProperty('metro-labels','visibility',vis);}
+  if(layer==='flights'){map.setLayoutProperty('flights-symbols','visibility',vis);map.setLayoutProperty('flights-labels','visibility',vis);}
+  if(layer==='ships'){map.setLayoutProperty('ships-circles','visibility',vis);map.setLayoutProperty('ships-labels','visibility',vis);}
+  if(layer==='trains'){map.setLayoutProperty('trains-circles','visibility',vis);map.setLayoutProperty('trains-labels','visibility',vis);}
+  if(layer==='beaches')map.setLayoutProperty('beaches-circles','visibility',vis);
+  if(layer==='obras'){map.setLayoutProperty('obras-circles','visibility',vis);map.setLayoutProperty('obras-labels','visibility',vis);}
+  if(layer==='bus')map.setLayoutProperty('bus-circles','visibility',vis);
+  if(layer==='air')map.setLayoutProperty('air-heat','visibility',vis);
+}
+function toggleShipsPanel(btn){const p=document.getElementById('ships-panel');const visible=p.style.display==='block';p.style.display=visible?'none':'block';if(btn)btn.classList.toggle('active',!visible);}
+function showTooltip(e,html){tooltip.style.display='block';tooltip.innerHTML=html;tooltip.style.left=(e.point.x+14)+'px';tooltip.style.top=(e.point.y-10)+'px';}
+function hideTooltip(){tooltip.style.display='none';}
+</script>
+</body>
+</html>
