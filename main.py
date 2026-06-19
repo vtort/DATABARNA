@@ -41,6 +41,8 @@ cache = {
     "bicing": {"data": [], "updated": None},
     "air": {"data": [], "updated": None},
     "incidents": {"data": "", "updated": None},
+    "arbres": {"data": [], "updated": None},
+    "accidents": {"data": [], "updated": None},
 }
 
 # GeoJSON estático de trams (se carga una vez al inicio)
@@ -483,6 +485,83 @@ async def polling_loop():
         await asyncio.sleep(60)
 
 
+async def poll_arbres():
+    """145k arbres de Barcelona — dataset estàtic CSV, carrega un cop."""
+    url = "https://opendata-ajuntament.barcelona.cat/data/dataset/27b3f8a7-e536-4eea-b025-c64b4f83c021/resource/23124fd5-521f-40f8-85b8-efb1e71c2ec8/download/OD_Arbrat_Viari_BCN.csv"
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        r = await client.get(url)
+    reader = csv.DictReader(io.StringIO(r.text))
+    arbres = []
+    for a in reader:
+        try:
+            lat = float(a["latitud"])
+            lon = float(a["longitud"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        arbres.append({
+            "lon": lon, "lat": lat,
+            "especie": a.get("cat_nom_catala") or a.get("cat_nom_castella") or a.get("cat_nom_cientific", ""),
+            "cientific": a.get("cat_nom_cientific", ""),
+            "barri": a.get("nom_barri", ""),
+            "districte": a.get("nom_districte", ""),
+            "data_plantacio": (a.get("data_plantacio") or "")[:4],
+        })
+    if arbres:
+        cache["arbres"]["data"] = arbres
+        cache["arbres"]["updated"] = now_iso()
+    print(f"[arbres] {len(arbres)} arbres carregats")
+
+
+async def poll_accidents():
+    """Accidents de trànsit 2024 + 2025 — dataset semestral."""
+    sources = [
+        ("https://opendata-ajuntament.barcelona.cat/data/dataset/e769eb9d-d778-4cd7-9e3a-5858bba49b20/resource/066d46b1-25be-4f08-b0e0-5a233714bda2/download/2025_accidents_gu_bcn.csv", "static/accidents_2025.csv"),
+        ("https://opendata-ajuntament.barcelona.cat/data/dataset/e769eb9d-d778-4cd7-9e3a-5858bba49b20/resource/66f5e7e3-045b-4d19-b649-2eaea622ae93/download/2024_accidents_gu_bcn.csv", "static/accidents_2024.csv"),
+    ]
+    accidents = []
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        for url, local_path in sources:
+            text = None
+            r = await client.get(url)
+            if r.status_code == 200:
+                text = r.text
+            elif os.path.exists(local_path):
+                print(f"[accidents] HTTP {r.status_code}, usant còpia local {local_path}")
+                with open(local_path, encoding="utf-8") as f:
+                    text = f.read()
+            else:
+                print(f"[accidents] HTTP {r.status_code} i no hi ha còpia local")
+                continue
+            reader = csv.DictReader(io.StringIO(text))
+            for row in reader:
+                try:
+                    lat = float(row.get("Latitud_WGS84", ""))
+                    lon = float(row.get("Longitud_WGS84", ""))
+                except (ValueError, TypeError):
+                    continue
+                morts = int(row.get("Numero_morts", 0) or 0)
+                greus = int(row.get("Numero_lesionats_greus", 0) or 0)
+                lleus = int(row.get("Numero_lesionats_lleus", 0) or 0)
+                accidents.append({
+                    "lon": lon, "lat": lat,
+                    "any": row.get("NK_Any", ""),
+                    "mes": row.get("Nom_mes", ""),
+                    "hora": row.get("Hora_dia", ""),
+                    "torn": row.get("Descripcio_torn", ""),
+                    "carrer": row.get("Nom_carrer", ""),
+                    "barri": row.get("Nom_barri", ""),
+                    "morts": morts,
+                    "greus": greus,
+                    "lleus": lleus,
+                    "victimes": int(row.get("Numero_victimes", 0) or 0),
+                    "gravetat": "mortal" if morts > 0 else "greu" if greus > 0 else "lleu",
+                })
+    if accidents:
+        cache["accidents"]["data"] = accidents
+        cache["accidents"]["updated"] = now_iso()
+    print(f"[accidents] {len(accidents)} accidents carregats")
+
+
 async def slow_poll_loop():
     """Datos que cambian poco: barcos (cada 6h), playas (cada 6h)."""
     while True:
@@ -625,10 +704,11 @@ async def load_bus_stops():
 async def startup():
     await load_trams_geo()
     await load_bus_stops()
-    results = await asyncio.gather(poll_weather(), poll_ships(), poll_beaches(), poll_trains(), poll_obras(), return_exceptions=True)
-    for name, r in zip(['weather','ships','beaches','trains','obras'], results):
+    results = await asyncio.gather(poll_weather(), poll_ships(), poll_beaches(), poll_trains(), poll_obras(), poll_accidents(), return_exceptions=True)
+    for name, r in zip(['weather','ships','beaches','trains','obras','accidents'], results):
         if isinstance(r, Exception):
             print(f"[startup] {name} error: {r}")
+    asyncio.create_task(poll_arbres())  # 145k arbres — background, no bloqueja startup
     asyncio.create_task(polling_loop())
     asyncio.create_task(flights_loop())
     asyncio.create_task(slow_poll_loop())
@@ -1238,6 +1318,44 @@ def get_obras(geojson: bool = False, estat: Optional[str] = None):
 def get_beaches():
     """Estat de les platges metropolitanes de Barcelona."""
     return {"updated": cache["beaches"]["updated"], "beaches": cache["beaches"]["data"]}
+
+
+@app.get("/api/arbres")
+def get_arbres(geojson: bool = True, especie: Optional[str] = None):
+    """145k arbres de Barcelona amb espècie i ubicació."""
+    data = cache["arbres"]["data"]
+    if especie:
+        data = [a for a in data if especie.lower() in (a.get("especie") or "").lower()]
+    if geojson:
+        return {
+            "type": "FeatureCollection",
+            "updated": cache["arbres"]["updated"],
+            "features": [{
+                "type": "Feature",
+                "properties": {k: v for k, v in a.items() if k not in ("lon", "lat")},
+                "geometry": {"type": "Point", "coordinates": [a["lon"], a["lat"]]}
+            } for a in data]
+        }
+    return {"updated": cache["arbres"]["updated"], "count": len(data), "arbres": data}
+
+
+@app.get("/api/accidents")
+def get_accidents(geojson: bool = True, gravetat: Optional[str] = None):
+    """Accidents de trànsit 2024-2025 a Barcelona."""
+    data = cache["accidents"]["data"]
+    if gravetat:
+        data = [a for a in data if a.get("gravetat") == gravetat]
+    if geojson:
+        return {
+            "type": "FeatureCollection",
+            "updated": cache["accidents"]["updated"],
+            "features": [{
+                "type": "Feature",
+                "properties": {k: v for k, v in a.items() if k not in ("lon", "lat")},
+                "geometry": {"type": "Point", "coordinates": [a["lon"], a["lat"]]}
+            } for a in data]
+        }
+    return {"updated": cache["accidents"]["updated"], "count": len(data)}
 
 
 @app.get("/api/flights")
