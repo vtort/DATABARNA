@@ -1939,4 +1939,80 @@ def get_flights(geojson: bool = False):
     return {"updated": cache["flights"]["updated"], "flights": data}
 
 
+def _compute_hexbins(points_lonlat, size_deg=0.004):
+    """
+    Hexagonal binning en coordenades geogràfiques (flat-top).
+    Retorna GeoJSON FeatureCollection de polígons hexagonals.
+    """
+    # Escala lon per la latitud de BCN (~41°) per fer hexàgons equilibrats
+    LAT_SCALE = math.cos(math.radians(41.39))
+    SW = size_deg  # mida en graus lat
+    SL = size_deg / LAT_SCALE  # mida en graus lon
+
+    def _to_hex(lon, lat):
+        # Coordenades axials flat-top
+        q = (2/3 * lon / SL)
+        r = (-1/3 * lon / SL + math.sqrt(3)/3 * lat / SW)
+        # Cube round
+        s = -q - r
+        rq, rr, rs = round(q), round(r), round(s)
+        dq, dr, ds = abs(rq-q), abs(rr-r), abs(rs-s)
+        if dq > dr and dq > ds: rq = -rr - rs
+        elif dr > ds: rr = -rq - rs
+        return (rq, rr)
+
+    def _hex_polygon(q, r):
+        cx = SL * 3/2 * q
+        cy = SW * math.sqrt(3) * (r + q/2)
+        verts = []
+        for i in range(7):
+            a = math.radians(60 * i)
+            verts.append([round(cx + SL * math.cos(a), 6), round(cy + SW * math.sin(a), 6)])
+        return verts
+
+    bins = {}
+    for item in points_lonlat:
+        lon, lat = item["lon"], item["lat"]
+        key = _to_hex(lon, lat)
+        if key not in bins:
+            bins[key] = {"count": 0, "vals": []}
+        bins[key]["count"] += 1
+        if "val" in item:
+            bins[key]["vals"].append(item["val"])
+
+    features = []
+    for (q, r), b in bins.items():
+        poly = _hex_polygon(q, r)
+        avg_val = sum(b["vals"]) / len(b["vals"]) if b["vals"] else None
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": [poly]},
+            "properties": {"count": b["count"], "avg_val": avg_val}
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+
+@app.get("/api/hexbins/{layer}")
+def get_hexbins(layer: str):
+    """Hexagonal binning per Airbnb i Accidents."""
+    if layer == "airbnb":
+        data = cache["airbnb"]["data"]
+        if not data:
+            return {"type":"FeatureCollection","features":[]}
+        pts = [{"lon": f["geometry"]["coordinates"][0],
+                "lat": f["geometry"]["coordinates"][1],
+                "val": 1 if f["properties"].get("has_license") else 0}
+               for f in data.get("features", [])]
+        return JSONResponse(content=_compute_hexbins(pts, size_deg=0.004))
+    elif layer == "accidents":
+        data = cache["accidents"]["data"]
+        if not data:
+            return {"type":"FeatureCollection","features":[]}
+        pts = [{"lon": a["lon"], "lat": a["lat"],
+                "val": 3 if a["gravetat"] == "mortal" else 2 if a["gravetat"] == "greu" else 1}
+               for a in data]
+        return JSONResponse(content=_compute_hexbins(pts, size_deg=0.003))
+    return {"error": "layer must be airbnb or accidents"}
+
+
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

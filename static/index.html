@@ -90,6 +90,9 @@
   <button class="layer-btn" onclick="toggleLayer('equipaments',this)"><span class="layer-dot" style="background:#fb923c;border-radius:2px"></span>Equipaments</button>
   <button class="layer-btn" onclick="toggleLayer('mercats',this)"><span class="layer-dot" style="background:#facc15;border-radius:2px"></span>Mercats</button>
   <button class="layer-btn" onclick="toggleLayer('airbnb',this)"><span class="layer-dot" style="background:#ff385c"></span>Airbnb</button>
+  <button class="layer-btn" onclick="toggleLayer('hex_airbnb',this)"><span class="layer-dot" style="background:#ff385c;border-radius:0;clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)"></span>Hex Airbnb</button>
+  <button class="layer-btn" onclick="toggleLayer('hex_accidents',this)"><span class="layer-dot" style="background:#fbbf24;border-radius:0;clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)"></span>Hex Accidents</button>
+  <button class="layer-btn" onclick="toggleLayer('soroll3d',this)"><span class="layer-dot" style="background:linear-gradient(135deg,#1d4ed8,#ef4444);border-radius:2px"></span>3D Soroll</button>
 </div>
 <div id="time-slider">
   <div class="ts-mode">
@@ -107,7 +110,7 @@
 const API=window.location.hostname==='192.168.1.34'?'http://192.168.1.34:8001':'';
 let map;
 const tooltip=document.getElementById('tooltip');
-const layerState={traffic:true,bicing:true,metro:true,air:false,flights:true,trains:true,bus:false,ships:true,beaches:false,obras:true,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false};
+const layerState={traffic:true,bicing:true,metro:true,air:false,flights:true,trains:true,bus:false,ships:true,beaches:false,obras:true,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false,hex_airbnb:false,hex_accidents:false,soroll3d:false};
 
 (async()=>{
   const cfg=await(await fetch(`${API}/api/config`)).json();
@@ -306,6 +309,31 @@ map.on('load',()=>{
     'circle-stroke-width':1.5,
     'circle-stroke-color':['case',['get','operatiu'],'#059669','#374151'],
     'circle-opacity':0.9
+  }});
+
+  // ── Hexbins Airbnb ──
+  map.addSource('hex_airbnb',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'hex-airbnb-fill',type:'fill',source:'hex_airbnb',layout:{visibility:'none'},paint:{
+    'fill-color':['interpolate',['linear'],['get','count'],1,'rgba(255,56,92,0.15)',10,'rgba(255,56,92,0.4)',30,'rgba(225,28,62,0.6)',80,'rgba(131,58,180,0.75)',150,'rgba(88,28,135,0.9)'],
+    'fill-outline-color':'rgba(255,255,255,0.08)'
+  }});
+  map.addLayer({id:'hex-airbnb-label',type:'symbol',source:'hex_airbnb',filter:['>',['get','count'],5],layout:{visibility:'none','text-field':['get','count'],'text-size':10,'text-font':['DIN Offc Pro Medium','Arial Unicode MS Bold']},paint:{'text-color':'rgba(255,255,255,0.7)'}});
+
+  // ── Hexbins Accidents ──
+  map.addSource('hex_accidents',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'hex-accidents-fill',type:'fill',source:'hex_accidents',layout:{visibility:'none'},paint:{
+    'fill-color':['interpolate',['linear'],['get','count'],1,'rgba(253,224,71,0.2)',5,'rgba(251,191,36,0.45)',15,'rgba(249,115,22,0.65)',30,'rgba(239,68,68,0.8)',60,'rgba(127,29,29,0.95)'],
+    'fill-outline-color':'rgba(255,255,255,0.08)'
+  }});
+  map.addLayer({id:'hex-accidents-label',type:'symbol',source:'hex_accidents',filter:['>',['get','count'],3],layout:{visibility:'none','text-field':['get','count'],'text-size':10,'text-font':['DIN Offc Pro Medium','Arial Unicode MS Bold']},paint:{'text-color':'rgba(255,255,255,0.7)'}});
+
+  // ── Soroll 3D (optimitzat per vista edificis) ──
+  map.addLayer({id:'soroll-3d-lines',type:'line',source:'soroll',layout:{visibility:'none','line-join':'round','line-cap':'round'},paint:{
+    'line-color':['interpolate',['linear'],['get','db_total'],
+      38,'#1e40af', 45,'#2563eb', 52,'#16a34a', 57,'#ca8a04', 62,'#ea580c', 67,'#dc2626', 72,'#7f1d1d', 78,'#fff'],
+    'line-width':['interpolate',['linear'],['zoom'],13,3,15,7,17,14],
+    'line-opacity':0.95,
+    'line-blur':0.5
   }});
 
   // ── Airbnb pisos turístics ──
@@ -542,6 +570,19 @@ map.on('load',()=>{
   map.on('mouseenter','carrega-circles',()=>map.getCanvas().style.cursor='pointer');
   map.on('mouseleave','carrega-circles',()=>map.getCanvas().style.cursor='');
 
+  map.on('mousemove','hex-airbnb-fill',e=>{
+    const p=e.features[0].properties;
+    const pct=p.avg_val!=null?Math.round(p.avg_val*100)+'% amb llicència':'';
+    showTooltip(e,`<b>🏠 Airbnb</b><br>${p.count} pisos${pct?`<br><small>${pct}</small>`:''}`);
+  });
+  map.on('mouseleave','hex-airbnb-fill',hideTooltip);
+
+  map.on('mousemove','hex-accidents-fill',e=>{
+    const p=e.features[0].properties;
+    showTooltip(e,`<b>⚠️ Accidents</b><br>${p.count} accidents (2024-2025)`);
+  });
+  map.on('mouseleave','hex-accidents-fill',hideTooltip);
+
   map.on('mousemove','airbnb-points',e=>{
     const p=e.features[0].properties;
     const lic=p.has_license?'✅ Llicència HUTB':'⚠️ Sense llicència';
@@ -736,6 +777,8 @@ async function fetchAll(){
   fetchEquipaments();
   fetchMercats();
   fetchAirbnb();
+  fetchHexAirbnb();
+  fetchHexAccidents();
   setInterval(fetchFlights,15000);
   setInterval(fetchTrains,20000);
   document.getElementById('updated').textContent='actualitzat '+new Date().toLocaleTimeString('ca');
@@ -834,6 +877,17 @@ async function fetchAirbnb(){
   const data=await(await fetch(`${API}/api/airbnb`)).json();
   map.getSource('airbnb').setData(data);
 }
+async function fetchHexAirbnb(){
+  const data=await(await fetch(`${API}/api/hexbins/airbnb`)).json();
+  map.getSource('hex_airbnb').setData(data);
+}
+async function fetchHexAccidents(){
+  const data=await(await fetch(`${API}/api/hexbins/accidents`)).json();
+  map.getSource('hex_accidents').setData(data);
+}
+async function fetchSoroll3d(){
+  // ja usa la mateixa source que soroll — no cal re-fetch
+}
 async function fetchFlights(){
   const data=await(await fetch(`${API}/api/flights?geojson=true`)).json();
   map.getSource('flights').setData(data);
@@ -876,6 +930,15 @@ function toggleLayer(layer,btn){
   if(layer==='obras'){map.setLayoutProperty('obras-circles','visibility',vis);map.setLayoutProperty('obras-labels','visibility',vis);updateSliderVisibility();return;}
   if(layer==='carrega')map.setLayoutProperty('carrega-circles','visibility',vis);
   if(layer==='airbnb'){map.setLayoutProperty('airbnb-clusters','visibility',vis);map.setLayoutProperty('airbnb-cluster-count','visibility',vis);map.setLayoutProperty('airbnb-points','visibility',vis);}
+  if(layer==='hex_airbnb'){map.setLayoutProperty('hex-airbnb-fill','visibility',vis);map.setLayoutProperty('hex-airbnb-label','visibility',vis);}
+  if(layer==='hex_accidents'){map.setLayoutProperty('hex-accidents-fill','visibility',vis);map.setLayoutProperty('hex-accidents-label','visibility',vis);}
+  if(layer==='soroll3d'){
+    map.setLayoutProperty('soroll-3d-lines','visibility',vis);
+    map.setLayoutProperty('edificis-3d','visibility',vis);
+    layerState['edificis']=layerState['soroll3d'];
+    if(layerState['soroll3d']){map.easeTo({pitch:55,bearing:-20,duration:800});}
+    else{map.easeTo({pitch:0,bearing:0,duration:600});}
+  }
   if(layer==='equipaments')map.setLayoutProperty('equipaments-circles','visibility',vis);
   if(layer==='mercats')map.setLayoutProperty('mercats-circles','visibility',vis);
   if(layer==='fonts')map.setLayoutProperty('fonts-circles','visibility',vis);
