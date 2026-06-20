@@ -75,6 +75,7 @@
   <button class="layer-btn" onclick="toggleLayer('zones_verdes',this)"><span class="layer-dot" style="background:#4ade80;border-radius:2px"></span>Zones Verdes</button>
   <button class="layer-btn" onclick="toggleLayer('soroll',this)"><span class="layer-dot" style="background:#f59e0b;border-radius:2px"></span>Soroll</button>
   <button class="layer-btn" onclick="toggleLayer('calor',this)"><span class="layer-dot" style="background:#f87171;border-radius:2px"></span>Illa de Calor</button>
+  <button class="layer-btn" onclick="toggleLayer('carrega',this)"><span class="layer-dot" style="background:#34d399"></span>Càrrega EV</button>
 </div>
 <div id="tooltip"></div>
 <div id="ships-panel"><h3>⚓ Vaixells al Port</h3><div id="ships-list"><span style="color:#555">Carregant…</span></div></div>
@@ -82,7 +83,7 @@
 const API=window.location.hostname==='192.168.1.34'?'http://192.168.1.34:8001':'';
 let map;
 const tooltip=document.getElementById('tooltip');
-const layerState={traffic:true,bicing:true,metro:true,air:false,flights:true,trains:true,bus:false,ships:true,beaches:false,obras:true,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false};
+const layerState={traffic:true,bicing:true,metro:true,air:false,flights:true,trains:true,bus:false,ships:true,beaches:false,obras:true,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false};
 
 (async()=>{
   const cfg=await(await fetch(`${API}/api/config`)).json();
@@ -273,6 +274,16 @@ map.on('load',()=>{
       'circle-stroke-color':'rgba(255,255,255,0.6)'
   }});
 
+  // ── Càrrega EV ──
+  map.addSource('carrega',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'carrega-circles',type:'circle',source:'carrega',layout:{visibility:'none'},paint:{
+    'circle-radius':['interpolate',['linear'],['zoom'],11,4,15,9],
+    'circle-color':['case',['get','operatiu'],'#34d399','#6b7280'],
+    'circle-stroke-width':1.5,
+    'circle-stroke-color':['case',['get','operatiu'],'#059669','#374151'],
+    'circle-opacity':0.9
+  }});
+
   // ── Illa de calor urbana ──
   map.addSource('calor',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
   map.addLayer({id:'calor-fill',type:'fill',source:'calor',layout:{visibility:'none'},paint:{
@@ -430,6 +441,14 @@ map.on('load',()=>{
   map.on('mouseleave','arbres-points',()=>map.getCanvas().style.cursor='');
 
   // ── Accidents tooltips ──
+  map.on('mousemove','carrega-circles',e=>{
+    const p=e.features[0].properties;
+    const estat=p.operatiu?'🟢 Operatiu':'⚫ Inactiu';
+    showTooltip(e,`<strong>${p.name||'Estació EV'}</strong>${p.address||''}<br>${estat} · ${p.vehicle} · ${p.n_sockets} endolls${p.connectors?'<br>'+p.connectors:''}`);
+  });
+  map.on('mouseleave','carrega-circles',hideTooltip);
+  map.on('mouseenter','carrega-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','carrega-circles',()=>map.getCanvas().style.cursor='');
   map.on('mousemove','calor-fill',e=>{
     const p=e.features[0].properties;
     const t=p.temp!=null?`${p.temp}°C · `:'';
@@ -566,6 +585,7 @@ async function fetchAll(){
   fetchZonesVerdes();
   fetchSoroll();
   fetchCalor();
+  fetchCarrega();
   setInterval(fetchFlights,15000);
   setInterval(fetchTrains,20000);
   document.getElementById('updated').textContent='actualitzat '+new Date().toLocaleTimeString('ca');
@@ -624,6 +644,10 @@ async function fetchPoblacio(){
   const data=await(await fetch(`${API}/api/poblacio`)).json();
   map.getSource('poblacio').setData(data);
 }
+async function fetchCarrega(){
+  const data=await(await fetch(`${API}/api/carrega?geojson=true`)).json();
+  map.getSource('carrega').setData(data);
+}
 async function fetchCalor(){
   const data=await(await fetch(`${API}/api/calor`)).json();
   map.getSource('calor').setData(data);
@@ -676,6 +700,7 @@ function toggleLayer(layer,btn){
   if(layer==='air')map.setLayoutProperty('air-heat','visibility',vis);
   if(layer==='arbres'){map.setLayoutProperty('arbres-clusters','visibility',vis);map.setLayoutProperty('arbres-cluster-count','visibility',vis);map.setLayoutProperty('arbres-points','visibility',vis);}
   if(layer==='accidents'){map.setLayoutProperty('accidents-heat','visibility',vis);map.setLayoutProperty('accidents-circles','visibility',vis);}
+  if(layer==='carrega')map.setLayoutProperty('carrega-circles','visibility',vis);
   if(layer==='calor')map.setLayoutProperty('calor-fill','visibility',vis);
   if(layer==='soroll')map.setLayoutProperty('soroll-lines','visibility',vis);
   if(layer==='zones_verdes')map.setLayoutProperty('zones-verdes-fill','visibility',vis);

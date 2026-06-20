@@ -46,6 +46,7 @@ cache = {
     "accidents": {"data": [], "updated": None},
     "poblacio": {"data": None, "updated": None},
     "zones_verdes": {"data": None, "updated": None},
+    "carrega": {"data": [], "updated": None},
 }
 
 # GeoJSON estático de trams (se carga una vez al inicio)
@@ -689,6 +690,52 @@ async def poll_poblacio():
     print(f"[poblacio] {len(features)} seccions censals, max densitat {max(f['properties']['density'] for f in features) if features else 0:.0f} hab/km²")
 
 
+async def poll_carrega():
+    """Punts de recàrrega vehicles elèctrics — BCN open data trimestral."""
+    url = "https://opendata-ajuntament.barcelona.cat/data/dataset/e9da8fe0-5de1-4ca3-97a8-4a8374ded921/resource/e0857d01-ae76-485e-8b4f-ddb02a0a8a07/download"
+    local_path = "static/carrega.json"
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        r = await client.get(url)
+    if r.status_code == 200:
+        raw = r.json()
+        with open(local_path, "w") as f:
+            json.dump(raw, f)
+    elif os.path.exists(local_path):
+        print(f"[carrega] HTTP {r.status_code}, usant còpia local")
+        with open(local_path) as f:
+            raw = json.load(f)
+    else:
+        print(f"[carrega] HTTP {r.status_code} sense còpia local")
+        return
+
+    # Vehicle_type: 0=cotxe, 1=moto/bici
+    # State: 5=operatiu, altres=inactiu/manteniment
+    stations = []
+    for s in raw:
+        lat = s.get("Station_lat"); lon = s.get("Station_lng")
+        if not lat or not lon: continue
+        sockets = s.get("Sockets", [])
+        connectors = ", ".join(sorted(set(
+            t for sock in sockets for t in str(sock.get("Connector_types","")).split(",") if t
+        )))
+        max_kw = max((sock.get("MaxChargingTime",0) for sock in sockets), default=0)
+        stations.append({
+            "lat": lat, "lon": lon,
+            "name": s.get("Station_name",""),
+            "address": s.get("Station_address",""),
+            "vehicle": "cotxe" if s.get("Vehicle_type") == 0 else "moto/bici",
+            "state": s.get("State"),
+            "operatiu": s.get("State") == 5,
+            "connectors": connectors,
+            "n_sockets": len(sockets),
+        })
+
+    if stations:
+        cache["carrega"]["data"] = stations
+        cache["carrega"]["updated"] = now_iso()
+    print(f"[carrega] {len(stations)} estacions ({sum(1 for s in stations if s['operatiu'])} operatives)")
+
+
 async def poll_zones_verdes():
     """Parcs i zones verdes — OSM Overpass, amb còpia local com a fallback."""
     local_path = "static/zones_verdes.geojson"
@@ -871,6 +918,7 @@ async def startup():
     asyncio.create_task(poll_arbres())
     asyncio.create_task(poll_poblacio())
     asyncio.create_task(poll_zones_verdes())
+    asyncio.create_task(poll_carrega())
     asyncio.create_task(polling_loop())
     asyncio.create_task(flights_loop())
     asyncio.create_task(slow_poll_loop())
@@ -1518,6 +1566,18 @@ def get_accidents(geojson: bool = True, gravetat: Optional[str] = None):
             } for a in data]
         }
     return {"updated": cache["accidents"]["updated"], "count": len(data)}
+
+
+@app.get("/api/carrega")
+def get_carrega(geojson: bool = True):
+    data = cache["carrega"]["data"]
+    if not geojson:
+        return {"updated": cache["carrega"]["updated"], "count": len(data)}
+    return {"type":"FeatureCollection","features":[{
+        "type":"Feature",
+        "geometry":{"type":"Point","coordinates":[s["lon"],s["lat"]]},
+        "properties":{k:v for k,v in s.items() if k not in ("lat","lon")}
+    } for s in data]}
 
 
 @app.get("/api/calor")
