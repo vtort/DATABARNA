@@ -45,6 +45,7 @@ cache = {
     "arbres": {"data": [], "updated": None},
     "accidents": {"data": [], "updated": None},
     "poblacio": {"data": None, "updated": None},
+    "zones_verdes": {"data": None, "updated": None},
 }
 
 # GeoJSON estático de trams (se carga una vez al inicio)
@@ -490,9 +491,19 @@ async def polling_loop():
 async def poll_arbres():
     """145k arbres de Barcelona — dataset estàtic CSV, carrega un cop."""
     url = "https://opendata-ajuntament.barcelona.cat/data/dataset/27b3f8a7-e536-4eea-b025-c64b4f83c021/resource/23124fd5-521f-40f8-85b8-efb1e71c2ec8/download/OD_Arbrat_Viari_BCN.csv"
+    local_path = "static/arbres.csv"
     async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
         r = await client.get(url)
-    reader = csv.DictReader(io.StringIO(r.text))
+    if r.status_code == 200:
+        text = r.text
+    elif os.path.exists(local_path):
+        print(f"[arbres] HTTP {r.status_code}, usant còpia local")
+        with open(local_path, encoding="utf-8") as f:
+            text = f.read()
+    else:
+        print(f"[arbres] HTTP {r.status_code} i no hi ha còpia local")
+        return
+    reader = csv.DictReader(io.StringIO(text))
     arbres = []
     for a in reader:
         try:
@@ -666,6 +677,39 @@ async def poll_poblacio():
     print(f"[poblacio] {len(features)} seccions censals, max densitat {max(f['properties']['density'] for f in features) if features else 0:.0f} hab/km²")
 
 
+async def poll_zones_verdes():
+    """Parcs i zones verdes — OSM Overpass, amb còpia local com a fallback."""
+    local_path = "static/zones_verdes.geojson"
+    query = '[out:json][timeout:50];(way["leisure"="park"](41.32,2.05,41.47,2.23);way["leisure"="garden"](41.32,2.05,41.47,2.23););out geom;'
+    geojson = None
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post("https://overpass-api.de/api/interpreter", data={"data": query})
+        if r.status_code == 200:
+            elements = r.json().get("elements", [])
+            features = []
+            for el in elements:
+                geom = el.get("geometry", [])
+                if not geom:
+                    continue
+                coords = [[g["lon"], g["lat"]] for g in geom]
+                tags = el.get("tags", {})
+                features.append({"type":"Feature","geometry":{"type":"Polygon","coordinates":[coords]},"properties":{"name":tags.get("name",""),"type":tags.get("leisure",tags.get("landuse",""))}})
+            geojson = {"type":"FeatureCollection","features":features}
+            with open(local_path, "w") as f:
+                json.dump(geojson, f)
+    except Exception as e:
+        print(f"[zones_verdes] Overpass error: {e}")
+    if not geojson and os.path.exists(local_path):
+        print("[zones_verdes] usant còpia local")
+        with open(local_path) as f:
+            geojson = json.load(f)
+    if geojson:
+        cache["zones_verdes"]["data"] = geojson
+        cache["zones_verdes"]["updated"] = now_iso()
+        print(f"[zones_verdes] {len(geojson['features'])} parcs carregats")
+
+
 async def slow_poll_loop():
     """Datos que cambian poco: barcos (cada 6h), playas (cada 6h)."""
     while True:
@@ -814,6 +858,7 @@ async def startup():
             print(f"[startup] {name} error: {r}")
     asyncio.create_task(poll_arbres())
     asyncio.create_task(poll_poblacio())
+    asyncio.create_task(poll_zones_verdes())
     asyncio.create_task(polling_loop())
     asyncio.create_task(flights_loop())
     asyncio.create_task(slow_poll_loop())
@@ -1461,6 +1506,40 @@ def get_accidents(geojson: bool = True, gravetat: Optional[str] = None):
             } for a in data]
         }
     return {"updated": cache["accidents"]["updated"], "count": len(data)}
+
+
+@app.get("/api/calor")
+def get_calor():
+    path = "static/calor.geojson"
+    if not os.path.exists(path):
+        return {"type":"FeatureCollection","features":[]}
+    with open(path) as f:
+        data = json.load(f)
+    # Injectar temperatura actual del cache (Open-Meteo)
+    weather = cache.get("weather", {}).get("data") or {}
+    base_temp = weather.get("temperature") if weather else None
+    if base_temp is not None:
+        for feat in data["features"]:
+            offset = feat["properties"].get("offset", 0)
+            feat["properties"]["temp"] = round(base_temp + offset, 1)
+    return JSONResponse(content=data)
+
+
+@app.get("/api/soroll")
+def get_soroll():
+    path = "static/soroll.geojson"
+    if not os.path.exists(path):
+        return {"type":"FeatureCollection","features":[]}
+    with open(path) as f:
+        return JSONResponse(content=json.load(f))
+
+
+@app.get("/api/zones_verdes")
+def get_zones_verdes():
+    data = cache["zones_verdes"]["data"]
+    if not data:
+        return {"type":"FeatureCollection","features":[]}
+    return JSONResponse(content=data)
 
 
 @app.get("/api/poblacio")
