@@ -48,6 +48,9 @@ cache = {
     "poblacio": {"data": None, "updated": None},
     "zones_verdes": {"data": None, "updated": None},
     "carrega": {"data": [], "updated": None},
+    "fonts": {"data": None, "updated": None},
+    "desfibril·ladors": {"data": None, "updated": None},
+    "lavabos": {"data": None, "updated": None},
 }
 
 # GeoJSON estático de trams (se carga una vez al inicio)
@@ -775,6 +778,61 @@ async def poll_zones_verdes():
         print(f"[zones_verdes] {len(geojson['features'])} parcs carregats")
 
 
+async def _poll_osm_points(amenity_filter: str, cache_key: str, local_path: str, label: str):
+    """Generic OSM Overpass fetch for point amenities (nodes only)."""
+    bbox = "41.32,2.05,41.47,2.23"
+    query = f'[out:json][timeout:50];node[{amenity_filter}]({bbox});out body;'
+    geojson = None
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post("https://overpass-api.de/api/interpreter", data={"data": query})
+        if r.status_code == 200:
+            elements = r.json().get("elements", [])
+            features = []
+            for el in elements:
+                lat = el.get("lat"); lon = el.get("lon")
+                if not lat or not lon:
+                    continue
+                tags = el.get("tags", {})
+                features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                    "properties": {
+                        "name": tags.get("name", ""),
+                        "description": tags.get("description", ""),
+                        "wheelchair": tags.get("wheelchair", ""),
+                        "fee": tags.get("fee", ""),
+                        "opening_hours": tags.get("opening_hours", ""),
+                        "operator": tags.get("operator", ""),
+                    }
+                })
+            geojson = {"type": "FeatureCollection", "features": features}
+            with open(local_path, "w") as f:
+                json.dump(geojson, f)
+    except Exception as e:
+        print(f"[{label}] Overpass error: {e}")
+    if not geojson and os.path.exists(local_path):
+        print(f"[{label}] usant còpia local")
+        with open(local_path) as f:
+            geojson = json.load(f)
+    if geojson:
+        cache[cache_key]["data"] = geojson
+        cache[cache_key]["updated"] = now_iso()
+        print(f"[{label}] {len(geojson['features'])} elements carregats")
+
+
+async def poll_fonts():
+    await _poll_osm_points('"amenity"="drinking_water"', "fonts", "static/fonts.geojson", "fonts")
+
+
+async def poll_desfibril():
+    await _poll_osm_points('"emergency"="defibrillator"', "desfibril·ladors", "static/desfibril.geojson", "desfibril")
+
+
+async def poll_lavabos():
+    await _poll_osm_points('"amenity"="toilets"', "lavabos", "static/lavabos.geojson", "lavabos")
+
+
 async def slow_poll_loop():
     """Datos que cambian poco: barcos (cada 6h), playas (cada 6h)."""
     while True:
@@ -925,6 +983,9 @@ async def startup():
     asyncio.create_task(poll_poblacio())
     asyncio.create_task(poll_zones_verdes())
     asyncio.create_task(poll_carrega())
+    asyncio.create_task(poll_fonts())
+    asyncio.create_task(poll_desfibril())
+    asyncio.create_task(poll_lavabos())
     asyncio.create_task(polling_loop())
     asyncio.create_task(flights_loop())
     asyncio.create_task(slow_poll_loop())
@@ -1626,6 +1687,24 @@ def get_poblacio():
     if not data:
         return {"type":"FeatureCollection","features":[]}
     return JSONResponse(content=data)
+
+
+@app.get("/api/fonts")
+def get_fonts():
+    data = cache["fonts"]["data"]
+    return JSONResponse(content=data if data else {"type":"FeatureCollection","features":[]})
+
+
+@app.get("/api/desfibril")
+def get_desfibril():
+    data = cache["desfibril·ladors"]["data"]
+    return JSONResponse(content=data if data else {"type":"FeatureCollection","features":[]})
+
+
+@app.get("/api/lavabos")
+def get_lavabos():
+    data = cache["lavabos"]["data"]
+    return JSONResponse(content=data if data else {"type":"FeatureCollection","features":[]})
 
 
 @app.get("/api/flights")

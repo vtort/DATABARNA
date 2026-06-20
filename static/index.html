@@ -76,6 +76,9 @@
   <button class="layer-btn" onclick="toggleLayer('soroll',this)"><span class="layer-dot" style="background:#f59e0b;border-radius:2px"></span>Soroll</button>
   <button class="layer-btn" onclick="toggleLayer('calor',this)"><span class="layer-dot" style="background:#f87171;border-radius:2px"></span>Illa de Calor</button>
   <button class="layer-btn" onclick="toggleLayer('carrega',this)"><span class="layer-dot" style="background:#34d399"></span>Càrrega EV</button>
+  <button class="layer-btn" onclick="toggleLayer('fonts',this)"><span class="layer-dot" style="background:#38bdf8"></span>Fonts</button>
+  <button class="layer-btn" onclick="toggleLayer('desfibril',this)"><span class="layer-dot" style="background:#f472b6"></span>DEA</button>
+  <button class="layer-btn" onclick="toggleLayer('lavabos',this)"><span class="layer-dot" style="background:#a78bfa"></span>Lavabos</button>
 </div>
 <div id="tooltip"></div>
 <div id="ships-panel"><h3>⚓ Vaixells al Port</h3><div id="ships-list"><span style="color:#555">Carregant…</span></div></div>
@@ -83,7 +86,7 @@
 const API=window.location.hostname==='192.168.1.34'?'http://192.168.1.34:8001':'';
 let map;
 const tooltip=document.getElementById('tooltip');
-const layerState={traffic:true,bicing:true,metro:true,air:false,flights:true,trains:true,bus:false,ships:true,beaches:false,obras:true,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false};
+const layerState={traffic:true,bicing:true,metro:true,air:false,flights:true,trains:true,bus:false,ships:true,beaches:false,obras:true,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false};
 
 (async()=>{
   const cfg=await(await fetch(`${API}/api/config`)).json();
@@ -284,6 +287,36 @@ map.on('load',()=>{
     'circle-opacity':0.9
   }});
 
+  // ── Fonts públiques ──
+  map.addSource('fonts',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'fonts-circles',type:'circle',source:'fonts',layout:{visibility:'none'},paint:{
+    'circle-radius':['interpolate',['linear'],['zoom'],12,4,16,8],
+    'circle-color':'#38bdf8',
+    'circle-stroke-width':1.5,
+    'circle-stroke-color':'#0284c7',
+    'circle-opacity':0.9
+  }});
+
+  // ── Desfibril·ladors DEA ──
+  map.addSource('desfibril',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'desfibril-circles',type:'circle',source:'desfibril',layout:{visibility:'none'},paint:{
+    'circle-radius':['interpolate',['linear'],['zoom'],12,5,16,10],
+    'circle-color':'#f472b6',
+    'circle-stroke-width':1.5,
+    'circle-stroke-color':'#be185d',
+    'circle-opacity':0.9
+  }});
+
+  // ── Lavabos públics ──
+  map.addSource('lavabos',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'lavabos-circles',type:'circle',source:'lavabos',layout:{visibility:'none'},paint:{
+    'circle-radius':['interpolate',['linear'],['zoom'],12,4,16,8],
+    'circle-color':'#a78bfa',
+    'circle-stroke-width':1.5,
+    'circle-stroke-color':'#7c3aed',
+    'circle-opacity':0.9
+  }});
+
   // ── Illa de calor urbana ──
   map.addSource('calor',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
   map.addLayer({id:'calor-fill',type:'fill',source:'calor',layout:{visibility:'none'},paint:{
@@ -451,6 +484,32 @@ map.on('load',()=>{
   map.on('mouseleave','carrega-circles',hideTooltip);
   map.on('mouseenter','carrega-circles',()=>map.getCanvas().style.cursor='pointer');
   map.on('mouseleave','carrega-circles',()=>map.getCanvas().style.cursor='');
+
+  map.on('mousemove','fonts-circles',e=>{
+    const p=e.features[0].properties;
+    showTooltip(e,`<b>💧 Font pública</b>${p.name?`<br>${p.name}`:''}`);
+  });
+  map.on('mouseleave','fonts-circles',hideTooltip);
+  map.on('mouseenter','fonts-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','fonts-circles',()=>map.getCanvas().style.cursor='');
+
+  map.on('mousemove','desfibril-circles',e=>{
+    const p=e.features[0].properties;
+    showTooltip(e,`<b>🫀 Desfibril·lador (DEA)</b>${p.name?`<br>${p.name}`:''}${p.operator?`<br><small>${p.operator}</small>`:''}`);
+  });
+  map.on('mouseleave','desfibril-circles',hideTooltip);
+  map.on('mouseenter','desfibril-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','desfibril-circles',()=>map.getCanvas().style.cursor='');
+
+  map.on('mousemove','lavabos-circles',e=>{
+    const p=e.features[0].properties;
+    const fee=p.fee&&p.fee!=='no'?` · ${p.fee==='yes'?'de pagament':p.fee}`:'';
+    const wc=p.wheelchair==='yes'?' · ♿':'';
+    showTooltip(e,`<b>🚻 Lavabo públic</b>${p.name?`<br>${p.name}`:''}${fee||wc?`<br><small>${fee}${wc}</small>`:''}`);
+  });
+  map.on('mouseleave','lavabos-circles',hideTooltip);
+  map.on('mouseenter','lavabos-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','lavabos-circles',()=>map.getCanvas().style.cursor='');
   map.on('mousemove','calor-fill',e=>{
     const p=e.features[0].properties;
     const t=p.temp!=null?`${p.temp}°C · `:'';
@@ -588,6 +647,9 @@ async function fetchAll(){
   fetchSoroll();
   fetchCalor();
   fetchCarrega();
+  fetchFonts();
+  fetchDesfibril();
+  fetchLavabos();
   setInterval(fetchFlights,15000);
   setInterval(fetchTrains,20000);
   document.getElementById('updated').textContent='actualitzat '+new Date().toLocaleTimeString('ca');
@@ -662,6 +724,18 @@ async function fetchZonesVerdes(){
   const data=await(await fetch(`${API}/api/zones_verdes`)).json();
   map.getSource('zones_verdes').setData(data);
 }
+async function fetchFonts(){
+  const data=await(await fetch(`${API}/api/fonts`)).json();
+  map.getSource('fonts').setData(data);
+}
+async function fetchDesfibril(){
+  const data=await(await fetch(`${API}/api/desfibril`)).json();
+  map.getSource('desfibril').setData(data);
+}
+async function fetchLavabos(){
+  const data=await(await fetch(`${API}/api/lavabos`)).json();
+  map.getSource('lavabos').setData(data);
+}
 async function fetchFlights(){
   const data=await(await fetch(`${API}/api/flights?geojson=true`)).json();
   map.getSource('flights').setData(data);
@@ -703,6 +777,9 @@ function toggleLayer(layer,btn){
   if(layer==='arbres'){map.setLayoutProperty('arbres-clusters','visibility',vis);map.setLayoutProperty('arbres-cluster-count','visibility',vis);map.setLayoutProperty('arbres-points','visibility',vis);}
   if(layer==='accidents'){map.setLayoutProperty('accidents-heat','visibility',vis);map.setLayoutProperty('accidents-circles','visibility',vis);}
   if(layer==='carrega')map.setLayoutProperty('carrega-circles','visibility',vis);
+  if(layer==='fonts')map.setLayoutProperty('fonts-circles','visibility',vis);
+  if(layer==='desfibril')map.setLayoutProperty('desfibril-circles','visibility',vis);
+  if(layer==='lavabos')map.setLayoutProperty('lavabos-circles','visibility',vis);
   if(layer==='calor')map.setLayoutProperty('calor-fill','visibility',vis);
   if(layer==='soroll')map.setLayoutProperty('soroll-lines','visibility',vis);
   if(layer==='zones_verdes')map.setLayoutProperty('zones-verdes-fill','visibility',vis);
