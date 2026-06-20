@@ -752,7 +752,9 @@ async def poll_zones_verdes():
     geojson = None
     try:
         async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post("https://overpass-api.de/api/interpreter", data={"data": query})
+            r = await client.post("https://overpass-api.de/api/interpreter", data={"data": query},
+                                  headers={"Content-Type": "application/x-www-form-urlencoded",
+                                           "User-Agent": "DATABARNA/1.0 (barcelona urban data dashboard)"})
         if r.status_code == 200:
             elements = r.json().get("elements", [])
             features = []
@@ -779,46 +781,51 @@ async def poll_zones_verdes():
 
 
 async def _poll_osm_points(amenity_filter: str, cache_key: str, local_path: str, label: str):
-    """Generic OSM Overpass fetch for point amenities (nodes only)."""
-    bbox = "41.32,2.05,41.47,2.23"
-    query = f'[out:json][timeout:50];node[{amenity_filter}]({bbox});out body;'
+    """Generic OSM Overpass fetch for point amenities. If local file exists, skip Overpass."""
     geojson = None
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post("https://overpass-api.de/api/interpreter", data={"data": query})
-        if r.status_code == 200:
-            elements = r.json().get("elements", [])
-            features = []
-            for el in elements:
-                lat = el.get("lat"); lon = el.get("lon")
-                if not lat or not lon:
-                    continue
-                tags = el.get("tags", {})
-                features.append({
-                    "type": "Feature",
-                    "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                    "properties": {
-                        "name": tags.get("name", ""),
-                        "description": tags.get("description", ""),
-                        "wheelchair": tags.get("wheelchair", ""),
-                        "fee": tags.get("fee", ""),
-                        "opening_hours": tags.get("opening_hours", ""),
-                        "operator": tags.get("operator", ""),
-                    }
-                })
-            geojson = {"type": "FeatureCollection", "features": features}
-            with open(local_path, "w") as f:
-                json.dump(geojson, f)
-    except Exception as e:
-        print(f"[{label}] Overpass error: {e}")
-    if not geojson and os.path.exists(local_path):
-        print(f"[{label}] usant còpia local")
+    if os.path.exists(local_path):
         with open(local_path) as f:
             geojson = json.load(f)
+        print(f"[{label}] carregat des de fitxer estàtic ({len(geojson.get('features', []))} elements)")
+    else:
+        bbox = "41.32,2.05,41.47,2.23"
+        query = f'[out:json][timeout:50];node[{amenity_filter}]({bbox});out body;'
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.post("https://overpass-api.de/api/interpreter", data={"data": query},
+                                      headers={"Content-Type": "application/x-www-form-urlencoded",
+                                               "User-Agent": "DATABARNA/1.0 (barcelona urban data dashboard)"})
+            if r.status_code == 200:
+                elements = r.json().get("elements", [])
+                features = []
+                for el in elements:
+                    lat = el.get("lat"); lon = el.get("lon")
+                    if not lat or not lon:
+                        continue
+                    tags = el.get("tags", {})
+                    features.append({
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                        "properties": {
+                            "name": tags.get("name", ""),
+                            "description": tags.get("description", ""),
+                            "wheelchair": tags.get("wheelchair", ""),
+                            "fee": tags.get("fee", ""),
+                            "opening_hours": tags.get("opening_hours", ""),
+                            "operator": tags.get("operator", ""),
+                        }
+                    })
+                geojson = {"type": "FeatureCollection", "features": features}
+                with open(local_path, "w") as f:
+                    json.dump(geojson, f)
+                print(f"[{label}] {len(features)} elements descarregats i guardats")
+            else:
+                print(f"[{label}] Overpass HTTP {r.status_code}")
+        except Exception as e:
+            print(f"[{label}] Overpass error: {e}")
     if geojson:
         cache[cache_key]["data"] = geojson
         cache[cache_key]["updated"] = now_iso()
-        print(f"[{label}] {len(geojson['features'])} elements carregats")
 
 
 async def poll_fonts():
