@@ -327,14 +327,7 @@ map.on('load',()=>{
   }});
   map.addLayer({id:'hex-accidents-label',type:'symbol',source:'hex_accidents',filter:['>',['get','count'],3],layout:{visibility:'none','text-field':['get','count'],'text-size':10,'text-font':['DIN Offc Pro Medium','Arial Unicode MS Bold']},paint:{'text-color':'rgba(255,255,255,0.7)'}});
 
-  // ── Soroll 3D (optimitzat per vista edificis) ──
-  map.addLayer({id:'soroll-3d-lines',type:'line',source:'soroll',layout:{visibility:'none','line-join':'round','line-cap':'round'},paint:{
-    'line-color':['interpolate',['linear'],['get','db_total'],
-      38,'#1e40af', 45,'#2563eb', 52,'#16a34a', 57,'#ca8a04', 62,'#ea580c', 67,'#dc2626', 72,'#7f1d1d', 78,'#fff'],
-    'line-width':['interpolate',['linear'],['zoom'],13,3,15,7,17,14],
-    'line-opacity':0.95,
-    'line-blur':0.5
-  }});
+  // soroll-3d-lines s'afegeix després d'edificis-3d per renderitzar per sobre
 
   // ── Airbnb pisos turístics ──
   map.addSource('airbnb',{type:'geojson',data:{type:'FeatureCollection',features:[]},cluster:true,clusterMaxZoom:14,clusterRadius:40});
@@ -467,6 +460,14 @@ map.on('load',()=>{
       'fill-extrusion-opacity':0.85
     }
   });
+
+  // ── Soroll 3D — afegit DESPRÉS d'edificis-3d per renderitzar per sobre ──
+  map.addLayer({id:'soroll-3d-lines',type:'line',source:'soroll',layout:{visibility:'none','line-join':'round','line-cap':'round'},paint:{
+    'line-color':['interpolate',['linear'],['get','db_total'],
+      38,'#1e40af',45,'#2563eb',52,'#16a34a',57,'#ca8a04',62,'#ea580c',67,'#dc2626',72,'#7f1d1d',78,'#fff'],
+    'line-width':['interpolate',['linear'],['zoom'],13,3,15,7,17,14],
+    'line-opacity':0.95
+  }});
 
   // ── Tooltips ──
   map.on('mousemove','traffic-lines',e=>{const p=e.features[0].properties;showTooltip(e,`<strong>${p.description}</strong>${p.estado_label} · predicció: ${p.prediccion_label}`);});
@@ -933,11 +934,20 @@ function toggleLayer(layer,btn){
   if(layer==='hex_airbnb'){map.setLayoutProperty('hex-airbnb-fill','visibility',vis);map.setLayoutProperty('hex-airbnb-label','visibility',vis);}
   if(layer==='hex_accidents'){map.setLayoutProperty('hex-accidents-fill','visibility',vis);map.setLayoutProperty('hex-accidents-label','visibility',vis);}
   if(layer==='soroll3d'){
-    map.setLayoutProperty('soroll-3d-lines','visibility',vis);
-    map.setLayoutProperty('edificis-3d','visibility',vis);
-    layerState['edificis']=layerState['soroll3d'];
-    if(layerState['soroll3d']){map.easeTo({pitch:55,bearing:-20,duration:800});}
-    else{map.easeTo({pitch:0,bearing:0,duration:600});}
+    if(layerState['soroll3d']){
+      // Carrega soroll si no té dades
+      const src=map.getSource('soroll');
+      if(src&&src._data&&src._data.features&&src._data.features.length===0) fetchSoroll();
+      map.setLayoutProperty('soroll-3d-lines','visibility','visible');
+      map.setLayoutProperty('edificis-3d','visibility','visible');
+      layerState['edificis']=true;
+      map.easeTo({pitch:55,bearing:-20,duration:800});
+    } else {
+      map.setLayoutProperty('soroll-3d-lines','visibility','none');
+      map.setLayoutProperty('edificis-3d','visibility','none');
+      layerState['edificis']=false;
+      map.easeTo({pitch:0,bearing:0,duration:600});
+    }
   }
   if(layer==='equipaments')map.setLayoutProperty('equipaments-circles','visibility',vis);
   if(layer==='mercats')map.setLayoutProperty('mercats-circles','visibility',vis);
