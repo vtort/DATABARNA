@@ -21,6 +21,7 @@ DB_URL = os.environ.get("DB_URL", "")
 MAPBOX_TOKEN = os.environ.get("MAPBOX_TOKEN", "")
 OPENSKY_USER = os.environ.get("OPENSKY_USER", "")
 OPENSKY_PASS = os.environ.get("OPENSKY_PASS", "")
+OCM_KEY = os.environ.get("OCM_KEY", "")
 
 app = FastAPI(title="BCN Live Data")
 
@@ -691,43 +692,48 @@ async def poll_poblacio():
 
 
 async def poll_carrega():
-    """Punts de recàrrega vehicles elèctrics — BCN open data trimestral."""
-    url = "https://opendata-ajuntament.barcelona.cat/data/dataset/e9da8fe0-5de1-4ca3-97a8-4a8374ded921/resource/e0857d01-ae76-485e-8b4f-ddb02a0a8a07/download"
+    """Punts de recàrrega EV — OpenChargeMap API (actualitzat contínuament)."""
     local_path = "static/carrega.json"
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        r = await client.get(url)
-    if r.status_code == 200:
-        raw = r.json()
-        with open(local_path, "w") as f:
-            json.dump(raw, f)
-    elif os.path.exists(local_path):
-        print(f"[carrega] HTTP {r.status_code}, usant còpia local")
+    raw = None
+    if OCM_KEY:
+        url = (f"https://api.openchargemap.io/v3/poi/?output=json&countrycode=ES"
+               f"&latitude=41.3851&longitude=2.1734&distance=12&distanceunit=km"
+               f"&maxresults=2000&compact=true&verbose=false&key={OCM_KEY}")
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(url)
+        if r.status_code == 200:
+            raw = r.json()
+            with open(local_path, "w") as f:
+                json.dump(raw, f)
+        else:
+            print(f"[carrega] OCM HTTP {r.status_code}")
+
+    if raw is None and os.path.exists(local_path):
+        print("[carrega] usant còpia local")
         with open(local_path) as f:
             raw = json.load(f)
-    else:
-        print(f"[carrega] HTTP {r.status_code} sense còpia local")
+    if raw is None:
         return
 
-    # Vehicle_type: 0=cotxe, 1=moto/bici
-    # State: 5=operatiu, altres=inactiu/manteniment
+    # StatusTypeID: 50=operatiu, 150=temporalment fora, 0/None=desconegut
     stations = []
     for s in raw:
-        lat = s.get("Station_lat"); lon = s.get("Station_lng")
+        addr = s.get("AddressInfo", {})
+        lat = addr.get("Latitude"); lon = addr.get("Longitude")
         if not lat or not lon: continue
-        sockets = s.get("Sockets", [])
-        connectors = ", ".join(sorted(set(
-            t for sock in sockets for t in str(sock.get("Connector_types","")).split(",") if t
-        )))
-        max_kw = max((sock.get("MaxChargingTime",0) for sock in sockets), default=0)
+        conns = s.get("Connections", [])
+        max_kw = max((c.get("PowerKW") or 0 for c in conns), default=0)
+        status_ids = set(c.get("StatusTypeID") for c in conns)
+        operatiu = 50 in status_ids
         stations.append({
             "lat": lat, "lon": lon,
-            "name": s.get("Station_name",""),
-            "address": s.get("Station_address",""),
-            "vehicle": "cotxe" if s.get("Vehicle_type") == 0 else "moto/bici",
-            "state": s.get("State"),
-            "operatiu": s.get("State") == 5,
-            "connectors": connectors,
-            "n_sockets": len(sockets),
+            "name": addr.get("Title", ""),
+            "address": addr.get("AddressLine1", ""),
+            "operatiu": operatiu,
+            "n_sockets": sum(c.get("Quantity") or 1 for c in conns),
+            "max_kw": max_kw,
+            "cost": s.get("UsageCost", ""),
+            "operator": (s.get("OperatorInfo") or {}).get("Title", "") if isinstance(s.get("OperatorInfo"), dict) else "",
         })
 
     if stations:

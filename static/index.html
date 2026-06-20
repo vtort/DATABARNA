@@ -443,8 +443,10 @@ map.on('load',()=>{
   // ── Accidents tooltips ──
   map.on('mousemove','carrega-circles',e=>{
     const p=e.features[0].properties;
-    const estat=p.operatiu?'🟢 Operatiu':'⚫ Inactiu';
-    showTooltip(e,`<strong>${p.name||'Estació EV'}</strong>${p.address||''}<br>${estat} · ${p.vehicle} · ${p.n_sockets} endolls${p.connectors?'<br>'+p.connectors:''}`);
+    const estat=p.operatiu?'🟢 Operatiu':'⚫ Desconegut';
+    const kw=p.max_kw?` · ${p.max_kw}kW`:'';
+    const op=p.operator?`<br>${p.operator}`:'';
+    showTooltip(e,`<strong>${p.name||'Estació EV'}</strong>${p.address||''}<br>${estat} · ${p.n_sockets} endolls${kw}${op}${p.cost?'<br>'+p.cost:''}`);
   });
   map.on('mouseleave','carrega-circles',hideTooltip);
   map.on('mouseenter','carrega-circles',()=>map.getCanvas().style.cursor='pointer');
