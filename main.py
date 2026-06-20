@@ -399,9 +399,20 @@ async def poll_beaches():
 async def poll_obras():
     """Obres a la via pública de Barcelona (actualitzat trimestralment)."""
     url = "https://opendata-ajuntament.barcelona.cat/data/dataset/fd9f355f-2160-4f89-96a1-6ece3924e3bd/resource/089bcf9e-140e-4ea3-bf93-03c6260ba0f5/download"
+    local_path = "static/obras.json"
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         r = await client.get(url)
-    data = r.json()
+    if r.status_code == 200:
+        data = r.json()
+        with open(local_path, "w") as f:
+            json.dump(data, f)
+    elif os.path.exists(local_path):
+        print(f"[obras] HTTP {r.status_code}, usant còpia local")
+        with open(local_path) as f:
+            data = json.load(f)
+    else:
+        print(f"[obras] HTTP {r.status_code} sense còpia local")
+        return
     obras = []
     for o in data:
         if o.get("estat") == "Finalitzada":
@@ -426,8 +437,9 @@ async def poll_obras():
             "districte": o.get("nom_districte", ""),
             "coords": coords,
         })
-    cache["obras"]["data"] = obras
-    cache["obras"]["updated"] = now_iso()
+    if obras:
+        cache["obras"]["data"] = obras
+        cache["obras"]["updated"] = now_iso()
     print(f"[obras] {len(obras)} actives carregades")
 
 
