@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import io
+import json
 import math
 import os
 import re
@@ -43,6 +44,7 @@ cache = {
     "incidents": {"data": "", "updated": None},
     "arbres": {"data": [], "updated": None},
     "accidents": {"data": [], "updated": None},
+    "poblacio": {"data": None, "updated": None},
 }
 
 # GeoJSON estático de trams (se carga una vez al inicio)
@@ -562,6 +564,108 @@ async def poll_accidents():
     print(f"[accidents] {len(accidents)} accidents carregats")
 
 
+def _utm31n_to_wgs84(easting: float, northing: float):
+    """Converteix ETRS89 UTM zona 31N (EPSG:25831) a WGS84 lat/lon."""
+    a, f = 6378137.0, 1/298.257223563
+    b = a*(1-f); e2 = 1-(b/a)**2; k0 = 0.9996
+    x = easting - 500000; y = northing
+    M = y/k0
+    mu = M/(a*(1-e2/4-3*e2**2/64-5*e2**3/256))
+    e1 = (1-math.sqrt(1-e2))/(1+math.sqrt(1-e2))
+    phi1 = mu+(3*e1/2-27*e1**3/32)*math.sin(2*mu)+(21*e1**2/16-55*e1**4/32)*math.sin(4*mu)+(151*e1**3/96)*math.sin(6*mu)
+    N1 = a/math.sqrt(1-e2*math.sin(phi1)**2)
+    T1 = math.tan(phi1)**2; C1 = e2/(1-e2)*math.cos(phi1)**2
+    R1 = a*(1-e2)/(1-e2*math.sin(phi1)**2)**1.5
+    D = x/(N1*k0)
+    lat = phi1-(N1*math.tan(phi1)/R1)*(D**2/2-(5+3*T1+10*C1-4*C1**2-9*e2/(1-e2))*D**4/24+(61+90*T1+298*C1+45*T1**2-252*e2/(1-e2)-3*C1**2)*D**6/720)
+    lon0 = math.radians(3)  # zona 31: meridià central = 3°E
+    lon = lon0+(D-(1+2*T1+C1)*D**3/6+(5-2*C1+28*T1-3*C1**2+8*e2/(1-e2)+24*T1**2)*D**5/120)/math.cos(phi1)
+    return math.degrees(lat), math.degrees(lon)
+
+
+def _parse_wkt_polygon(wkt: str):
+    """Converteix WKT POLYGON de ETRS89 a llista de [lon,lat] WGS84."""
+    import re
+    coords_str = re.search(r'POLYGON\s*\(\((.+?)\)\)', wkt)
+    if not coords_str:
+        return None
+    rings = []
+    for ring_str in re.findall(r'\(([^()]+)\)', '(' + wkt.split('((', 1)[1]):
+        pts = []
+        for pair in ring_str.strip().split(','):
+            parts = pair.strip().split()
+            if len(parts) >= 2:
+                lat, lon = _utm31n_to_wgs84(float(parts[0]), float(parts[1]))
+                pts.append([round(lon, 6), round(lat, 6)])
+        if pts:
+            rings.append(pts)
+    return rings if rings else None
+
+
+async def poll_poblacio():
+    """Densitat de població per secció censal — INE Padró 2025 + BCN geometries."""
+    geo_url = "https://opendata-ajuntament.barcelona.cat/data/dataset/808daafa-d9ce-48c0-925a-fa5afdb1ed41/resource/db90a207-d125-4f80-aac5-f9d5d6e648f5/download"
+    pop_url = "https://opendata-ajuntament.barcelona.cat/data/dataset/16c11ddf-a783-4b64-aa68-3dc83dc70379/resource/c3e2f76d-8397-4316-9353-deb41154b495/download"
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        geo_r, pop_r = await asyncio.gather(client.get(geo_url), client.get(pop_url))
+
+    def _load(r, local_path):
+        if r.status_code == 200:
+            return r.json()
+        if os.path.exists(local_path):
+            print(f"[poblacio] HTTP {r.status_code}, usant còpia local {local_path}")
+            with open(local_path) as f:
+                return json.load(f)
+        print(f"[poblacio] HTTP {r.status_code} i no hi ha còpia local {local_path}")
+        return None
+
+    geo_data = _load(geo_r, "static/seccions_censals.json")
+    pop_data = _load(pop_r, "static/poblacio_sc.json")
+    if not geo_data or not pop_data:
+        return
+
+    # Sumar homes+dones per secció censal — clau: "01001" (districte+seccio, 5 digits)
+    pop_by_sc: dict[str, int] = {}
+    for row in pop_data:
+        sc_raw = str(row.get("Seccio_Censal", ""))  # ex: "1001" = districte1 + seccio001
+        # Normalitzar a 5 dígits: districte 2 digits + seccio 3 digits
+        sc_key = sc_raw.zfill(5) if len(sc_raw) <= 5 else sc_raw
+        pop_by_sc[sc_key] = pop_by_sc.get(sc_key, 0) + int(row.get("Valor", 0) or 0)
+
+    # Construir GeoJSON amb densitat
+    features = []
+    for sec in geo_data:
+        d = str(sec.get("codi_districte", "")).zfill(2)
+        s = str(sec.get("codi_seccio_censal", "")).zfill(3)
+        sc_code = d + s  # ex: "01001"
+        wkt = sec.get("geometria_etrs89", "")
+        if not wkt:
+            continue
+        rings = _parse_wkt_polygon(wkt)
+        if not rings:
+            continue
+        pop = pop_by_sc.get(sc_code, pop_by_sc.get(sc_code.lstrip("0"), 0))
+        # Àrea aproximada en km² (bounding box heurístic per ràtio ràpid)
+        lons = [p[0] for p in rings[0]]
+        lats = [p[1] for p in rings[0]]
+        dx = (max(lons)-min(lons))*111*math.cos(math.radians(sum(lats)/len(lats)))
+        dy = (max(lats)-min(lats))*111
+        area_km2 = max(dx*dy, 0.001)
+        density = round(pop/area_km2)
+        features.append({"type":"Feature","geometry":{"type":"Polygon","coordinates":rings},"properties":{
+            "sc": sc_code,
+            "barri": sec.get("nom_barri",""),
+            "districte": sec.get("nom_districte",""),
+            "poblacio": pop,
+            "density": density,
+        }})
+
+    geojson = {"type":"FeatureCollection","features":features}
+    cache["poblacio"]["data"] = geojson
+    cache["poblacio"]["updated"] = now_iso()
+    print(f"[poblacio] {len(features)} seccions censals, max densitat {max(f['properties']['density'] for f in features) if features else 0:.0f} hab/km²")
+
+
 async def slow_poll_loop():
     """Datos que cambian poco: barcos (cada 6h), playas (cada 6h)."""
     while True:
@@ -708,7 +812,8 @@ async def startup():
     for name, r in zip(['weather','ships','beaches','trains','obras','accidents'], results):
         if isinstance(r, Exception):
             print(f"[startup] {name} error: {r}")
-    asyncio.create_task(poll_arbres())  # 145k arbres — background, no bloqueja startup
+    asyncio.create_task(poll_arbres())
+    asyncio.create_task(poll_poblacio())
     asyncio.create_task(polling_loop())
     asyncio.create_task(flights_loop())
     asyncio.create_task(slow_poll_loop())
@@ -1356,6 +1461,14 @@ def get_accidents(geojson: bool = True, gravetat: Optional[str] = None):
             } for a in data]
         }
     return {"updated": cache["accidents"]["updated"], "count": len(data)}
+
+
+@app.get("/api/poblacio")
+def get_poblacio():
+    data = cache["poblacio"]["data"]
+    if not data:
+        return {"type":"FeatureCollection","features":[]}
+    return JSONResponse(content=data)
 
 
 @app.get("/api/flights")
