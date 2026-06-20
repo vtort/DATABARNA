@@ -35,6 +35,14 @@
     .metro-popup .loading { color: #555; font-size: 12px; }
     .mapboxgl-popup-content { background: #111 !important; border: 1px solid #333 !important; border-radius: 10px !important; padding: 0 !important; box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important; }
     .mapboxgl-popup-tip { border-top-color: #333 !important; }
+    #time-slider { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); background: #111; border: 1px solid #333; border-radius: 12px; padding: 12px 20px; z-index: 20; display: none; min-width: 380px; text-align: center; }
+    #time-slider .ts-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+    #time-slider .ts-value { font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 8px; }
+    #time-slider input[type=range] { width: 100%; accent-color: #3b82f6; cursor: pointer; }
+    #time-slider .ts-ends { display: flex; justify-content: space-between; font-size: 10px; color: #444; margin-top: 2px; }
+    #time-slider .ts-mode { display: flex; gap: 8px; justify-content: center; margin-bottom: 8px; }
+    #time-slider .ts-tab { font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid #333; background: transparent; color: #555; cursor: pointer; }
+    #time-slider .ts-tab.active { background: #1e3a5f; border-color: #3b82f6; color: #60a5fa; }
     #ships-panel { position: absolute; top: 60px; left: 16px; background: #111; border: 1px solid #333; border-radius: 10px; padding: 14px 16px; z-index: 20; display: none; max-height: 70vh; overflow-y: auto; min-width: 280px; }
     #ships-panel h3 { font-size: 13px; font-weight: 700; margin-bottom: 10px; color: #fff; }
     .ship-row { border-bottom: 1px solid #1e1e1e; padding: 8px 0; font-size: 12px; }
@@ -82,6 +90,16 @@
   <button class="layer-btn" onclick="toggleLayer('equipaments',this)"><span class="layer-dot" style="background:#fb923c;border-radius:2px"></span>Equipaments</button>
   <button class="layer-btn" onclick="toggleLayer('mercats',this)"><span class="layer-dot" style="background:#facc15;border-radius:2px"></span>Mercats</button>
   <button class="layer-btn" onclick="toggleLayer('airbnb',this)"><span class="layer-dot" style="background:#ff385c"></span>Airbnb</button>
+</div>
+<div id="time-slider">
+  <div class="ts-mode">
+    <button class="ts-tab active" id="ts-tab-accidents" onclick="setSliderMode('accidents')">Accidents</button>
+    <button class="ts-tab" id="ts-tab-obras" onclick="setSliderMode('obras')">Obres</button>
+  </div>
+  <div class="ts-label" id="ts-label">Filtra per mes</div>
+  <div class="ts-value" id="ts-value">—</div>
+  <input type="range" id="ts-range" min="0" max="0" value="0" oninput="onSliderChange(this.value)">
+  <div class="ts-ends"><span id="ts-start">—</span><span id="ts-end">—</span></div>
 </div>
 <div id="tooltip"></div>
 <div id="ships-panel"><h3>⚓ Vaixells al Port</h3><div id="ships-list"><span style="color:#555">Carregant…</span></div></div>
@@ -851,11 +869,11 @@ function toggleLayer(layer,btn){
   if(layer==='ships'){map.setLayoutProperty('ships-circles','visibility',vis);map.setLayoutProperty('ships-labels','visibility',vis);}
   if(layer==='trains'){map.setLayoutProperty('trains-circles','visibility',vis);map.setLayoutProperty('trains-labels','visibility',vis);}
   if(layer==='beaches')map.setLayoutProperty('beaches-circles','visibility',vis);
-  if(layer==='obras'){map.setLayoutProperty('obras-circles','visibility',vis);map.setLayoutProperty('obras-labels','visibility',vis);}
   if(layer==='bus')map.setLayoutProperty('bus-circles','visibility',vis);
   if(layer==='air')map.setLayoutProperty('air-heat','visibility',vis);
   if(layer==='arbres'){map.setLayoutProperty('arbres-clusters','visibility',vis);map.setLayoutProperty('arbres-cluster-count','visibility',vis);map.setLayoutProperty('arbres-points','visibility',vis);}
-  if(layer==='accidents'){map.setLayoutProperty('accidents-heat','visibility',vis);map.setLayoutProperty('accidents-circles','visibility',vis);}
+  if(layer==='accidents'){map.setLayoutProperty('accidents-heat','visibility',vis);map.setLayoutProperty('accidents-circles','visibility',vis);updateSliderVisibility();}
+  if(layer==='obras'){map.setLayoutProperty('obras-circles','visibility',vis);map.setLayoutProperty('obras-labels','visibility',vis);updateSliderVisibility();return;}
   if(layer==='carrega')map.setLayoutProperty('carrega-circles','visibility',vis);
   if(layer==='airbnb'){map.setLayoutProperty('airbnb-clusters','visibility',vis);map.setLayoutProperty('airbnb-cluster-count','visibility',vis);map.setLayoutProperty('airbnb-points','visibility',vis);}
   if(layer==='equipaments')map.setLayoutProperty('equipaments-circles','visibility',vis);
@@ -876,6 +894,74 @@ function toggleLayer(layer,btn){
     }
   }
 }
+// ── Time Slider ──────────────────────────────────────────────────────────────
+const MESOS=['Gen','Feb','Mar','Abr','Mai','Jun','Jul','Ago','Set','Oct','Nov','Des'];
+let sliderMode=null; // 'accidents' | 'obras'
+let sliderYMs=[]; // llista ordenada de valors YM disponibles
+
+function ym2label(ym){const y=Math.floor(ym/100);const m=ym%100;return `${MESOS[m-1]} ${y}`;}
+
+function buildYMRange(minYM,maxYM){
+  const r=[];
+  let y=Math.floor(minYM/100),m=minYM%100;
+  while(y*100+m<=maxYM){r.push(y*100+m);m++;if(m>12){m=1;y++;}}
+  return r;
+}
+
+function setSliderMode(mode){
+  sliderMode=mode;
+  document.querySelectorAll('.ts-tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById(`ts-tab-${mode}`).classList.add('active');
+  if(mode==='accidents'){
+    sliderYMs=buildYMRange(202401,202512);
+    document.getElementById('ts-label').textContent='Accidents per mes';
+  } else {
+    sliderYMs=buildYMRange(202001,202812);
+    document.getElementById('ts-label').textContent='Obres actives per mes';
+  }
+  const range=document.getElementById('ts-range');
+  range.min=0; range.max=sliderYMs.length-1;
+  // Per accidents, posicionar al mes actual; per obras al mes actual
+  const now=new Date(); const curYM=now.getFullYear()*100+(now.getMonth()+1);
+  let idx=sliderYMs.indexOf(curYM);
+  if(idx<0) idx=sliderYMs.length-1;
+  range.value=idx;
+  document.getElementById('ts-start').textContent=ym2label(sliderYMs[0]);
+  document.getElementById('ts-end').textContent=ym2label(sliderYMs[sliderYMs.length-1]);
+  onSliderChange(idx);
+}
+
+function onSliderChange(idx){
+  const ym=sliderYMs[parseInt(idx)];
+  document.getElementById('ts-value').textContent=ym2label(ym);
+  if(sliderMode==='accidents'){
+    const f=['==',['get','ym'],ym];
+    if(map.getLayer('accidents-heat')) map.setFilter('accidents-heat',f);
+    if(map.getLayer('accidents-circles')) map.setFilter('accidents-circles',f);
+  } else if(sliderMode==='obras'){
+    const f=['all',['<=',['get','inici_ym'],ym],['>=',['get','fi_ym'],ym]];
+    if(map.getLayer('obras-circles')) map.setFilter('obras-circles',f);
+    if(map.getLayer('obras-labels')) map.setFilter('obras-labels',f);
+  }
+}
+
+function updateSliderVisibility(){
+  const show=layerState['accidents']||layerState['obras'];
+  document.getElementById('time-slider').style.display=show?'block':'none';
+  if(show){
+    // activa el mode de la capa que s'acaba d'activar
+    if(layerState['accidents']&&sliderMode!=='accidents') setSliderMode('accidents');
+    else if(layerState['obras']&&!layerState['accidents']&&sliderMode!=='obras') setSliderMode('obras');
+  } else {
+    sliderMode=null;
+    // treu filtres
+    if(map.getLayer('accidents-heat')) map.setFilter('accidents-heat',null);
+    if(map.getLayer('accidents-circles')) map.setFilter('accidents-circles',null);
+    if(map.getLayer('obras-circles')) map.setFilter('obras-circles',null);
+    if(map.getLayer('obras-labels')) map.setFilter('obras-labels',null);
+  }
+}
+
 function toggleShipsPanel(btn){const p=document.getElementById('ships-panel');const visible=p.style.display==='block';p.style.display=visible?'none':'block';if(btn)btn.classList.toggle('active',!visible);}
 function showTooltip(e,html){tooltip.style.display='block';tooltip.innerHTML=html;tooltip.style.left=(e.point.x+14)+'px';tooltip.style.top=(e.point.y-10)+'px';}
 function hideTooltip(){tooltip.style.display='none';}

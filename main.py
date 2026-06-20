@@ -432,14 +432,24 @@ async def poll_obras():
             lons = [float(x[0]) for x in nums]
             lats = [float(x[1]) for x in nums]
             coords = [sum(lons)/len(lons), sum(lats)/len(lats)]
+        def _date_to_ym(d):
+            try:
+                parts = (d or "")[:7].split("-")
+                return int(parts[0]) * 100 + int(parts[1])
+            except (ValueError, IndexError):
+                return 0
+        data_inici = (o.get("data_inici") or "")[:10]
+        data_fi = (o.get("data_fi") or "")[:10]
         obras.append({
             "codi": o.get("codi", ""),
             "titol": o.get("titol", ""),
             "ubicacio": o.get("ubicacio", ""),
             "tipus": o.get("tipusobra", ""),
             "estat": o.get("estat", ""),
-            "data_inici": (o.get("data_inici") or "")[:10],
-            "data_fi": (o.get("data_fi") or "")[:10],
+            "data_inici": data_inici,
+            "data_fi": data_fi,
+            "inici_ym": _date_to_ym(data_inici),
+            "fi_ym": _date_to_ym(data_fi) or 209912,
             "promotor": o.get("promotor", ""),
             "barri": o.get("nom_barri", "").strip(),
             "districte": o.get("nom_districte", ""),
@@ -575,10 +585,14 @@ async def poll_accidents():
                 morts = int(row.get("Numero_morts", 0) or 0)
                 greus = int(row.get("Numero_lesionats_greus", 0) or 0)
                 lleus = int(row.get("Numero_lesionats_lleus", 0) or 0)
+                any_ = int(row.get("NK_Any", 0) or 0)
+                mes_ = int(row.get("Mes_any", 0) or 0)
                 accidents.append({
                     "lon": lon, "lat": lat,
-                    "any": row.get("NK_Any", ""),
-                    "mes": row.get("Nom_mes", ""),
+                    "any": any_,
+                    "mes": mes_,
+                    "nom_mes": row.get("Nom_mes", ""),
+                    "ym": any_ * 100 + mes_,
                     "hora": row.get("Hora_dia", ""),
                     "torn": row.get("Descripcio_torn", ""),
                     "carrer": row.get("Nom_carrer", ""),
