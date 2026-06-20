@@ -81,6 +81,7 @@
   <button class="layer-btn" onclick="toggleLayer('lavabos',this)"><span class="layer-dot" style="background:#a78bfa"></span>Lavabos</button>
   <button class="layer-btn" onclick="toggleLayer('equipaments',this)"><span class="layer-dot" style="background:#fb923c;border-radius:2px"></span>Equipaments</button>
   <button class="layer-btn" onclick="toggleLayer('mercats',this)"><span class="layer-dot" style="background:#facc15;border-radius:2px"></span>Mercats</button>
+  <button class="layer-btn" onclick="toggleLayer('airbnb',this)"><span class="layer-dot" style="background:#ff385c"></span>Airbnb</button>
 </div>
 <div id="tooltip"></div>
 <div id="ships-panel"><h3>⚓ Vaixells al Port</h3><div id="ships-list"><span style="color:#555">Carregant…</span></div></div>
@@ -88,7 +89,7 @@
 const API=window.location.hostname==='192.168.1.34'?'http://192.168.1.34:8001':'';
 let map;
 const tooltip=document.getElementById('tooltip');
-const layerState={traffic:true,bicing:true,metro:true,air:false,flights:true,trains:true,bus:false,ships:true,beaches:false,obras:true,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false};
+const layerState={traffic:true,bicing:true,metro:true,air:false,flights:true,trains:true,bus:false,ships:true,beaches:false,obras:true,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false};
 
 (async()=>{
   const cfg=await(await fetch(`${API}/api/config`)).json();
@@ -287,6 +288,22 @@ map.on('load',()=>{
     'circle-stroke-width':1.5,
     'circle-stroke-color':['case',['get','operatiu'],'#059669','#374151'],
     'circle-opacity':0.9
+  }});
+
+  // ── Airbnb pisos turístics ──
+  map.addSource('airbnb',{type:'geojson',data:{type:'FeatureCollection',features:[]},cluster:true,clusterMaxZoom:14,clusterRadius:40});
+  map.addLayer({id:'airbnb-clusters',type:'circle',source:'airbnb',filter:['has','point_count'],layout:{visibility:'none'},paint:{
+    'circle-color':['step',['get','point_count'],'#ff385c',50,'#e31c5f',200,'#c13584',500,'#833ab4'],
+    'circle-radius':['step',['get','point_count'],15,50,22,200,30,500,38],
+    'circle-opacity':0.85,
+    'circle-stroke-width':1,'circle-stroke-color':'#fff'
+  }});
+  map.addLayer({id:'airbnb-cluster-count',type:'symbol',source:'airbnb',filter:['has','point_count'],layout:{visibility:'none','text-field':'{point_count_abbreviated}','text-size':11,'text-font':['DIN Offc Pro Medium','Arial Unicode MS Bold']},paint:{'text-color':'#fff'}});
+  map.addLayer({id:'airbnb-points',type:'circle',source:'airbnb',filter:['!',['has','point_count']],layout:{visibility:'none'},paint:{
+    'circle-radius':5,
+    'circle-color':['match',['get','room_type'],'Entire home/apt','#ff385c','Private room','#e31c5f','Shared room','#c13584','Hotel room','#833ab4','#ff385c'],
+    'circle-stroke-width':1,'circle-stroke-color':'rgba(255,255,255,0.5)',
+    'circle-opacity':0.8
   }});
 
   // ── Equipaments municipals ──
@@ -507,6 +524,15 @@ map.on('load',()=>{
   map.on('mouseenter','carrega-circles',()=>map.getCanvas().style.cursor='pointer');
   map.on('mouseleave','carrega-circles',()=>map.getCanvas().style.cursor='');
 
+  map.on('mousemove','airbnb-points',e=>{
+    const p=e.features[0].properties;
+    const lic=p.has_license?'✅ Llicència HUTB':'⚠️ Sense llicència';
+    showTooltip(e,`<b>🏠 ${p.room_type||'Airbnb'}</b><br>${p.name||''}<br><small>${p.neighbourhood} · ${lic}</small>`);
+  });
+  map.on('mouseleave','airbnb-points',hideTooltip);
+  map.on('mouseenter','airbnb-points',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','airbnb-points',()=>map.getCanvas().style.cursor='');
+
   map.on('mousemove','equipaments-circles',e=>{
     const p=e.features[0].properties;
     const tipus={'library':'📚 Biblioteca','community_centre':'🏛 Centre Cívic / Ateneu','arts_centre':'🎭 Centre Cultural'}[p.amenity]||'🏢 Equipament';
@@ -691,6 +717,7 @@ async function fetchAll(){
   fetchLavabos();
   fetchEquipaments();
   fetchMercats();
+  fetchAirbnb();
   setInterval(fetchFlights,15000);
   setInterval(fetchTrains,20000);
   document.getElementById('updated').textContent='actualitzat '+new Date().toLocaleTimeString('ca');
@@ -785,6 +812,10 @@ async function fetchMercats(){
   const data=await(await fetch(`${API}/api/mercats`)).json();
   map.getSource('mercats').setData(data);
 }
+async function fetchAirbnb(){
+  const data=await(await fetch(`${API}/api/airbnb`)).json();
+  map.getSource('airbnb').setData(data);
+}
 async function fetchFlights(){
   const data=await(await fetch(`${API}/api/flights?geojson=true`)).json();
   map.getSource('flights').setData(data);
@@ -826,6 +857,7 @@ function toggleLayer(layer,btn){
   if(layer==='arbres'){map.setLayoutProperty('arbres-clusters','visibility',vis);map.setLayoutProperty('arbres-cluster-count','visibility',vis);map.setLayoutProperty('arbres-points','visibility',vis);}
   if(layer==='accidents'){map.setLayoutProperty('accidents-heat','visibility',vis);map.setLayoutProperty('accidents-circles','visibility',vis);}
   if(layer==='carrega')map.setLayoutProperty('carrega-circles','visibility',vis);
+  if(layer==='airbnb'){map.setLayoutProperty('airbnb-clusters','visibility',vis);map.setLayoutProperty('airbnb-cluster-count','visibility',vis);map.setLayoutProperty('airbnb-points','visibility',vis);}
   if(layer==='equipaments')map.setLayoutProperty('equipaments-circles','visibility',vis);
   if(layer==='mercats')map.setLayoutProperty('mercats-circles','visibility',vis);
   if(layer==='fonts')map.setLayoutProperty('fonts-circles','visibility',vis);

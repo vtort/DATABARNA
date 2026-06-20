@@ -53,6 +53,7 @@ cache = {
     "lavabos": {"data": None, "updated": None},
     "equipaments": {"data": None, "updated": None},
     "mercats": {"data": None, "updated": None},
+    "airbnb": {"data": None, "updated": None},
 }
 
 # GeoJSON estático de trams (se carga una vez al inicio)
@@ -889,6 +890,57 @@ async def _poll_osm_mixed(osm_query: str, cache_key: str, local_path: str, label
         cache[cache_key]["updated"] = now_iso()
 
 
+async def poll_airbnb():
+    """Pisos turístics — InsideAirbnb dataset públic. Estàtic: si existeix, no re-descarrega."""
+    local_path = "static/airbnb.geojson"
+    if os.path.exists(local_path):
+        with open(local_path) as f:
+            geojson = json.load(f)
+        print(f"[airbnb] carregat des de fitxer estàtic ({len(geojson.get('features', []))} pisos)")
+    else:
+        url = "https://data.insideairbnb.com/spain/catalonia/barcelona/2025-12-14/visualisations/listings.csv"
+        try:
+            async with httpx.AsyncClient(timeout=120, follow_redirects=True,
+                                         headers={"User-Agent": "Mozilla/5.0"}) as client:
+                r = await client.get(url)
+            if r.status_code == 200:
+                reader = csv.DictReader(io.StringIO(r.text))
+                features = []
+                for row in reader:
+                    try:
+                        lat, lon = float(row["latitude"]), float(row["longitude"])
+                    except (ValueError, KeyError):
+                        continue
+                    room_type = row.get("room_type", "")
+                    license_raw = row.get("license", "")
+                    has_license = bool(license_raw and "HUTB" in license_raw)
+                    features.append({
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                        "properties": {
+                            "name": row.get("name", "")[:80],
+                            "room_type": room_type,
+                            "neighbourhood": row.get("neighbourhood", ""),
+                            "price": row.get("price", ""),
+                            "reviews": row.get("number_of_reviews", ""),
+                            "host_listings": row.get("calculated_host_listings_count", ""),
+                            "has_license": has_license,
+                        }
+                    })
+                geojson = {"type": "FeatureCollection", "features": features}
+                with open(local_path, "w") as f:
+                    json.dump(geojson, f)
+                print(f"[airbnb] {len(features)} pisos descarregats i guardats")
+            else:
+                print(f"[airbnb] HTTP {r.status_code}")
+                return
+        except Exception as e:
+            print(f"[airbnb] error: {e}")
+            return
+    cache["airbnb"]["data"] = geojson
+    cache["airbnb"]["updated"] = now_iso()
+
+
 async def poll_equipaments():
     bbox = "41.32,2.05,41.47,2.23"
     q = (f'[out:json][timeout:50];'
@@ -1105,6 +1157,7 @@ async def startup():
     asyncio.create_task(poll_lavabos())
     asyncio.create_task(poll_equipaments())
     asyncio.create_task(poll_mercats())
+    asyncio.create_task(poll_airbnb())
     asyncio.create_task(polling_loop())
     asyncio.create_task(flights_loop())
     asyncio.create_task(slow_poll_loop())
@@ -1835,6 +1888,12 @@ def get_equipaments():
 @app.get("/api/mercats")
 def get_mercats():
     data = cache["mercats"]["data"]
+    return JSONResponse(content=data if data else {"type":"FeatureCollection","features":[]})
+
+
+@app.get("/api/airbnb")
+def get_airbnb():
+    data = cache["airbnb"]["data"]
     return JSONResponse(content=data if data else {"type":"FeatureCollection","features":[]})
 
 
