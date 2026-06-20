@@ -51,6 +51,8 @@ cache = {
     "fonts": {"data": None, "updated": None},
     "desfibril·ladors": {"data": None, "updated": None},
     "lavabos": {"data": None, "updated": None},
+    "equipaments": {"data": None, "updated": None},
+    "mercats": {"data": None, "updated": None},
 }
 
 # GeoJSON estático de trams (se carga una vez al inicio)
@@ -840,6 +842,114 @@ async def poll_lavabos():
     await _poll_osm_points('"amenity"="toilets"', "lavabos", "static/lavabos.geojson", "lavabos")
 
 
+async def _poll_osm_mixed(osm_query: str, cache_key: str, local_path: str, label: str, extra_props_fn=None):
+    """OSM Overpass fetch for nodes+ways (uses center for ways). Skip if local file exists."""
+    geojson = None
+    if os.path.exists(local_path):
+        with open(local_path) as f:
+            geojson = json.load(f)
+        print(f"[{label}] carregat des de fitxer estàtic ({len(geojson.get('features', []))} elements)")
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.post("https://overpass-api.de/api/interpreter", data={"data": osm_query},
+                                      headers={"Content-Type": "application/x-www-form-urlencoded",
+                                               "User-Agent": "DATABARNA/1.0 (barcelona urban data dashboard)"})
+            if r.status_code == 200:
+                elements = r.json().get("elements", [])
+                features = []
+                for el in elements:
+                    if el["type"] == "node":
+                        lat, lon = el.get("lat"), el.get("lon")
+                    else:
+                        c = el.get("center", {})
+                        lat, lon = c.get("lat"), c.get("lon")
+                    if not lat or not lon:
+                        continue
+                    tags = el.get("tags", {})
+                    props = {"name": tags.get("name", ""), "type": el["type"],
+                             "amenity": tags.get("amenity", ""), "operator": tags.get("operator", ""),
+                             "opening_hours": tags.get("opening_hours", ""), "phone": tags.get("phone", ""),
+                             "website": tags.get("website", tags.get("contact:website", ""))}
+                    if extra_props_fn:
+                        props.update(extra_props_fn(tags))
+                    features.append({"type": "Feature",
+                                     "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                                     "properties": props})
+                geojson = {"type": "FeatureCollection", "features": features}
+                with open(local_path, "w") as f:
+                    json.dump(geojson, f)
+                print(f"[{label}] {len(features)} elements descarregats i guardats")
+            else:
+                print(f"[{label}] Overpass HTTP {r.status_code}")
+        except Exception as e:
+            print(f"[{label}] error: {e}")
+    if geojson:
+        cache[cache_key]["data"] = geojson
+        cache[cache_key]["updated"] = now_iso()
+
+
+async def poll_equipaments():
+    bbox = "41.32,2.05,41.47,2.23"
+    q = (f'[out:json][timeout:50];'
+         f'(node["amenity"~"^(library|community_centre|arts_centre)$"]({bbox});'
+         f'way["amenity"~"^(library|community_centre|arts_centre)$"]({bbox}););'
+         f'out center tags;')
+    await _poll_osm_mixed(q, "equipaments", "static/equipaments.geojson", "equipaments")
+
+
+async def poll_mercats():
+    """Mercats municipals — BCN open data, amb fallback OSM."""
+    local_path = "static/mercats.geojson"
+    geojson = None
+    if os.path.exists(local_path):
+        with open(local_path) as f:
+            geojson = json.load(f)
+        print(f"[mercats] carregat des de fitxer estàtic ({len(geojson.get('features', []))} mercats)")
+    else:
+        # BCN open data — Institut Municipal de Mercats
+        url = "https://opendata-ajuntament.barcelona.cat/data/api/action/datastore_search?resource_id=b204171d-79e3-49d1-9a0a-0bdbb9d46bd2&limit=100"
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                r = await client.get(url)
+            if r.status_code == 200:
+                records = r.json().get("result", {}).get("records", [])
+                features = []
+                for rec in records:
+                    lat = rec.get("latitud") or rec.get("Latitud") or rec.get("LATITUD")
+                    lon = rec.get("longitud") or rec.get("Longitud") or rec.get("LONGITUD")
+                    name = rec.get("nom_mercat") or rec.get("Nom_Mercat") or rec.get("NOM") or rec.get("nom") or ""
+                    if not lat or not lon:
+                        continue
+                    try:
+                        lat, lon = float(lat), float(lon)
+                    except (ValueError, TypeError):
+                        continue
+                    features.append({"type": "Feature",
+                                     "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                                     "properties": {"name": name, "address": rec.get("adreca", rec.get("Adreca", "")),
+                                                    "districte": rec.get("nom_districte", rec.get("Districte", ""))}})
+                if features:
+                    geojson = {"type": "FeatureCollection", "features": features}
+                    with open(local_path, "w") as f:
+                        json.dump(geojson, f)
+                    print(f"[mercats] {len(features)} mercats descarregats de BCN open data")
+        except Exception as e:
+            print(f"[mercats] BCN open data error: {e}")
+
+        if not geojson:
+            # Fallback OSM
+            bbox = "41.32,2.05,41.47,2.23"
+            q = (f'[out:json][timeout:30];'
+                 f'(node["amenity"="marketplace"]({bbox});way["amenity"="marketplace"]({bbox}););out center tags;')
+            await _poll_osm_mixed(q, "mercats", local_path, "mercats")
+            return
+
+    if geojson:
+        cache["mercats"]["data"] = geojson
+        cache["mercats"]["updated"] = now_iso()
+
+
 async def slow_poll_loop():
     """Datos que cambian poco: barcos (cada 6h), playas (cada 6h)."""
     while True:
@@ -993,6 +1103,8 @@ async def startup():
     asyncio.create_task(poll_fonts())
     asyncio.create_task(poll_desfibril())
     asyncio.create_task(poll_lavabos())
+    asyncio.create_task(poll_equipaments())
+    asyncio.create_task(poll_mercats())
     asyncio.create_task(polling_loop())
     asyncio.create_task(flights_loop())
     asyncio.create_task(slow_poll_loop())
@@ -1711,6 +1823,18 @@ def get_desfibril():
 @app.get("/api/lavabos")
 def get_lavabos():
     data = cache["lavabos"]["data"]
+    return JSONResponse(content=data if data else {"type":"FeatureCollection","features":[]})
+
+
+@app.get("/api/equipaments")
+def get_equipaments():
+    data = cache["equipaments"]["data"]
+    return JSONResponse(content=data if data else {"type":"FeatureCollection","features":[]})
+
+
+@app.get("/api/mercats")
+def get_mercats():
+    data = cache["mercats"]["data"]
     return JSONResponse(content=data if data else {"type":"FeatureCollection","features":[]})
 
 
