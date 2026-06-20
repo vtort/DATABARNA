@@ -461,13 +461,7 @@ map.on('load',()=>{
     }
   });
 
-  // ── Soroll 3D — afegit DESPRÉS d'edificis-3d per renderitzar per sobre ──
-  map.addLayer({id:'soroll-3d-lines',type:'line',source:'soroll',layout:{visibility:'none','line-join':'round','line-cap':'round'},paint:{
-    'line-color':['interpolate',['linear'],['get','db_total'],
-      38,'#1e40af',45,'#2563eb',52,'#16a34a',57,'#ca8a04',62,'#ea580c',67,'#dc2626',72,'#7f1d1d',78,'#fff'],
-    'line-width':['interpolate',['linear'],['zoom'],13,3,15,7,17,14],
-    'line-opacity':0.95
-  }});
+  // soroll-3d-lines eliminat — ara els edificis agafen el color del soroll via feature-state
 
   // ── Tooltips ──
   map.on('mousemove','traffic-lines',e=>{const p=e.features[0].properties;showTooltip(e,`<strong>${p.description}</strong>${p.estado_label} · predicció: ${p.prediccion_label}`);});
@@ -935,19 +929,25 @@ function toggleLayer(layer,btn){
   if(layer==='hex_accidents'){map.setLayoutProperty('hex-accidents-fill','visibility',vis);map.setLayoutProperty('hex-accidents-label','visibility',vis);}
   if(layer==='soroll3d'){
     if(layerState['soroll3d']){
-      // Carrega soroll si no té dades
+      // Carrega soroll si no té dades, espera i activa
       const src=map.getSource('soroll');
-      if(src&&src._data&&src._data.features&&src._data.features.length===0) fetchSoroll();
-      map.setLayoutProperty('soroll-3d-lines','visibility','visible');
+      const hasSoroll=src&&src._data&&src._data.features&&src._data.features.length>0;
+      if(!hasSoroll){
+        fetchSoroll().then(()=>{_sorollGridIdx=null;_activateSoroll3D();});
+      } else {
+        _sorollGridIdx=null;
+        _activateSoroll3D();
+      }
       map.setLayoutProperty('edificis-3d','visibility','visible');
       layerState['edificis']=true;
       map.easeTo({pitch:55,bearing:-20,duration:800});
     } else {
-      map.setLayoutProperty('soroll-3d-lines','visibility','none');
+      _deactivateSoroll3D();
       map.setLayoutProperty('edificis-3d','visibility','none');
       layerState['edificis']=false;
       map.easeTo({pitch:0,bearing:0,duration:600});
     }
+    return;
   }
   if(layer==='equipaments')map.setLayoutProperty('equipaments-circles','visibility',vis);
   if(layer==='mercats')map.setLayoutProperty('mercats-circles','visibility',vis);
@@ -967,6 +967,79 @@ function toggleLayer(layer,btn){
     }
   }
 }
+// ── Soroll 3D — Spatial join client-side ─────────────────────────────────────
+let _sorollGridIdx=null;
+const _SCELL=0.008; // ~800m grid cells per indexar segments
+
+function _buildSorollIndex(){
+  const src=map.getSource('soroll');
+  if(!src||!src._data) return;
+  const features=src._data.features||[];
+  const idx={};
+  for(const f of features){
+    const db=f.properties&&f.properties.db_total;
+    if(!db) continue;
+    const coords=f.geometry.type==='LineString'?f.geometry.coordinates:f.geometry.coordinates.flat();
+    for(const [lon,lat] of coords){
+      const k=`${Math.floor(lon/_SCELL)},${Math.floor(lat/_SCELL)}`;
+      if(!idx[k]) idx[k]=[];
+      idx[k].push({lon,lat,db});
+    }
+  }
+  _sorollGridIdx=idx;
+}
+
+function _nearestDb(lon,lat){
+  if(!_sorollGridIdx) return null;
+  const cx=Math.floor(lon/_SCELL), cy=Math.floor(lat/_SCELL);
+  let best=null, bestD=Infinity;
+  for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++){
+    for(const p of (_sorollGridIdx[`${cx+dx},${cy+dy}`]||[])){
+      const d=(p.lon-lon)**2+(p.lat-lat)**2;
+      if(d<bestD){bestD=d;best=p.db;}
+    }
+  }
+  return best;
+}
+
+const _NOISE_PAINT=['interpolate',['linear'],['feature-state','noise'],
+  38,'#1e3a5f',45,'#1d4ed8',52,'#16a34a',57,'#eab308',62,'#f97316',67,'#ef4444',72,'#7f1d1d',78,'#ffffff'];
+const _DEFAULT_PAINT=['interpolate',['linear'],['get','height'],
+  0,'#1a1a2e',10,'#16213e',20,'#0f3460',40,'#1a1a4e',80,'#23235e',150,'#2d2d6e'];
+
+function _paintBuildingsNoise(){
+  if(!layerState['soroll3d']) return;
+  if(!_sorollGridIdx) _buildSorollIndex();
+  if(!_sorollGridIdx) return;
+  const buildings=map.queryRenderedFeatures({layers:['edificis-3d']});
+  for(const b of buildings){
+    if(b.id==null) continue;
+    // centroide aproximat agafant la primera coordenada del primer ring
+    let lon,lat;
+    try{[lon,lat]=b.geometry.coordinates[0][0];}catch(e){continue;}
+    const db=_nearestDb(lon,lat);
+    if(db!=null) map.setFeatureState({source:'composite',sourceLayer:'building',id:b.id},{noise:db});
+  }
+}
+
+let _noiseRenderBound=false;
+function _activateSoroll3D(){
+  // Canvia el color dels edificis a feature-state noise
+  map.setPaintProperty('edificis-3d','fill-extrusion-color',
+    ['case',['!=',['feature-state','noise'],null],_NOISE_PAINT,_DEFAULT_PAINT]);
+  if(!_noiseRenderBound){
+    map.on('moveend',_paintBuildingsNoise);
+    map.on('zoomend',_paintBuildingsNoise);
+    _noiseRenderBound=true;
+  }
+  // Espera que els edificis estiguin carregats
+  if(map.isStyleLoaded()) setTimeout(_paintBuildingsNoise,400);
+}
+
+function _deactivateSoroll3D(){
+  map.setPaintProperty('edificis-3d','fill-extrusion-color',_DEFAULT_PAINT);
+}
+
 // ── Time Slider ──────────────────────────────────────────────────────────────
 const MESOS=['Gen','Feb','Mar','Abr','Mai','Jun','Jul','Ago','Set','Oct','Nov','Des'];
 let sliderMode=null; // 'accidents' | 'obras'
