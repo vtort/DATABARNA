@@ -21,6 +21,33 @@ DB_URL = os.environ.get("DB_URL", "")
 MAPBOX_TOKEN = os.environ.get("MAPBOX_TOKEN", "")
 OPENSKY_USER = os.environ.get("OPENSKY_USER", "")
 OPENSKY_PASS = os.environ.get("OPENSKY_PASS", "")
+OPENSKY_CLIENT_ID = os.environ.get("OPENSKY_CLIENT_ID", "")
+OPENSKY_CLIENT_SECRET = os.environ.get("OPENSKY_CLIENT_SECRET", "")
+OPENSKY_TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+
+_opensky_token: str = ""
+_opensky_token_expiry: float = 0.0
+
+async def _get_opensky_token() -> str:
+    """Obté o reutilitza el token OAuth2 d'OpenSky (expira cada 30min)."""
+    import time
+    global _opensky_token, _opensky_token_expiry
+    if _opensky_token and time.time() < _opensky_token_expiry - 60:
+        return _opensky_token
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.post(OPENSKY_TOKEN_URL, data={
+            "grant_type": "client_credentials",
+            "client_id": OPENSKY_CLIENT_ID,
+            "client_secret": OPENSKY_CLIENT_SECRET,
+        })
+    if r.status_code != 200:
+        print(f"[opensky-auth] error {r.status_code}: {r.text[:200]}")
+        return ""
+    d = r.json()
+    _opensky_token = d.get("access_token", "")
+    _opensky_token_expiry = time.time() + d.get("expires_in", 1800)
+    print("[opensky-auth] token renovat OK")
+    return _opensky_token
 OCM_KEY = os.environ.get("OCM_KEY", "")
 
 app = FastAPI(title="BCN Live Data")
@@ -462,12 +489,27 @@ async def poll_obras():
 
 
 async def poll_flights():
-    """Aviones en tiempo real sobre Barcelona via OpenSky Network."""
+    """Aviones en tiempo real sobre Barcelona via OpenSky Network (OAuth2)."""
     url = "https://opensky-network.org/api/states/all?lamin=41.1&lamax=41.7&lomin=1.8&lomax=2.5"
-    auth = (OPENSKY_USER, OPENSKY_PASS) if OPENSKY_USER else None
-    async with httpx.AsyncClient(timeout=10, auth=auth) as client:
-        r = await client.get(url)
+    headers = {}
+    if OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET:
+        token = await _get_opensky_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(url, headers=headers)
+    if r.status_code == 401:
+        # token caducat — forcem renovació al proper cicle
+        global _opensky_token_expiry
+        _opensky_token_expiry = 0.0
+        print("[flights] 401 — token renovat al proper cicle")
+        return
+    if r.status_code == 429:
+        print("[flights] 429 rate limit — esperant 5min")
+        await asyncio.sleep(300)
+        return
     if r.status_code != 200:
+        print(f"[flights] HTTP {r.status_code}")
         return
     states = r.json().get("states") or []
     flights = []
@@ -491,13 +533,63 @@ async def poll_flights():
 
 
 async def flights_loop():
-    """Actualiza aviones cada 30s (amb auth: 4000 req/dia)."""
+    """Actualiza aviones cada 60s (amb auth: ~1440 req/dia, sota el límit de 4000)."""
     while True:
         try:
             await poll_flights()
         except Exception as e:
             print(f"[flights] error: {e}")
-        await asyncio.sleep(30)
+        await asyncio.sleep(60)
+
+
+async def poll_camaras_dgt():
+    """Càmeres DGT a Catalunya via etraffic API (actualitza cada 10min — imatges estàtiques)."""
+    import base64
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                "https://etraffic.dgt.es/etrafficWEB/api/cache/getCamaras",
+                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                json={},
+            )
+        if r.status_code != 200:
+            print(f"[camaras_dgt] HTTP {r.status_code}")
+            return
+        raw = r.text.strip().strip('"')
+        decoded = bytes(b ^ 70 ^ 0x20 for b in base64.b64decode(raw))
+        d = json.loads(decoded)
+        url_base = d.get("urlBase", "https://etraffic.dgt.es/camarasEtraffic/")
+        camaras_all = d.get("camaras", d) if isinstance(d, dict) else d
+        # Filtra Catalunya (bbox: lon 0.15-3.33, lat 40.5-42.9)
+        camaras = [
+            {
+                "id": c["idCamara"],
+                "carretera": c.get("carretera", ""),
+                "pk": c.get("pk", ""),
+                "sentido": c.get("sentido", ""),
+                "lon": float(c["coordX"]),
+                "lat": float(c["coordY"]),
+                "imagen_url": f"{url_base}{c['idCamara']}.jpg",
+            }
+            for c in camaras_all
+            if isinstance(c, dict) and c.get("coordX") and c.get("coordY")
+            and 0.15 < float(c["coordX"]) < 3.33
+            and 40.5 < float(c["coordY"]) < 42.9
+        ]
+        cache["camaras_dgt"]["data"] = camaras
+        cache["camaras_dgt"]["updated"] = now_iso()
+        print(f"[camaras_dgt] {len(camaras)} càmeres carregades")
+    except Exception as e:
+        print(f"[camaras_dgt] error: {e}")
+
+
+async def camaras_dgt_loop():
+    while True:
+        try:
+            await poll_camaras_dgt()
+        except Exception as e:
+            print(f"[camaras_dgt] error: {e}")
+        await asyncio.sleep(600)
 
 
 async def polling_loop():
@@ -1174,6 +1266,7 @@ async def startup():
     asyncio.create_task(poll_airbnb())
     asyncio.create_task(polling_loop())
     asyncio.create_task(flights_loop())
+    asyncio.create_task(camaras_dgt_loop())
     asyncio.create_task(slow_poll_loop())
     asyncio.create_task(persist_loop())
 
@@ -1532,6 +1625,121 @@ cache["ships"] = {"data": [], "updated": None}
 cache["trains"] = {"data": [], "updated": None}
 cache["beaches"] = {"data": [], "updated": None}
 cache["obras"] = {"data": [], "updated": None}
+cache["camaras_dgt"] = {"data": [], "updated": None}
+
+# Càmeres SCT (Generalitat) — coords exactes via Cercalia API (bbox Barcelona metropolitana)
+CAMARAS_SCT = [
+    # (sct_id, carretera, nom, lon, lat)
+    ("sc60.jpg", "A-2", "A-2 (Pk 560.58)", 1.68214927, 41.59419814),
+    ("sc23.jpg", "C-32", "C-32 (Pk 43.46)", 1.95275776, 41.26731322),
+    ("sc73.jpg", "C-32", "C-32 (Pk 46.9)", 1.98966056, 41.27929528),
+    ("sc44.jpg", "B-23", "B-23 (Pk 15.2)", 1.99412518, 41.44633828),
+    ("sc18.jpg", "C-31", "C-31 (Pk 182.65)", 1.99965881, 41.2699904),
+    ("sc43.jpg", "B-23", "B-23 (Pk 13.57)", 2.00438394, 41.43493475),
+    ("rc3.jpg", "C-16", "C-16 (Pk 22.35)", 2.006486, 41.5504178),
+    ("sc40.jpg", "B-23", "B-23 (Pk 11.1)", 2.01125606, 41.41351471),
+    ("nc29.jpg", "C-58", "C-58 (Pk 20.06)", 2.01770596, 41.54313617),
+    ("sc72.jpg", "C-32", "C-32 (Pk 50.37)", 2.02120041, 41.29896464),
+    ("sc37.jpg", "B-23", "B-23 (Pk 7.38)", 2.02896185, 41.38129689),
+    ("sc67.jpg", "B-23", "B-23 (Pk 6.14)", 2.03784619, 41.37396227),
+    ("sc59.jpg", "A-2", "A-2 (Pk 606.09)", 2.04238268, 41.36891415),
+    ("nc28.jpg", "C-58", "C-58 (Pk 17.73)", 2.04398168, 41.54401351),
+    ("rc2.jpg", "C-16", "C-16 (Pk 14.85)", 2.04971293, 41.49748317),
+    ("sc33.jpg", "B-23", "B-23 (Pk 3.11)", 2.05939555, 41.37536978),
+    ("sc65.jpg", "B-20", "B-20 (Pk 0.83)", 2.05966469, 41.32984026),
+    ("sc71.jpg", "C-32", "C-32 (Pk 54.3)", 2.06175637, 41.33534905),
+    ("sc64.jpg", "B-20", "B-20 (Pk 1.65)", 2.07222286, 41.32781536),
+    ("sc12.jpg", "C-31", "C-31 (Pk 188.94)", 2.07473413, 41.30817566),
+    ("nc80.jpg", "AP-7", "AP-7 (Pk 154)", 2.07616609, 41.47571856),
+    ("sc70.jpg", "C-31", "C-31 (Pk 192.18)", 2.08051002, 41.29907063),
+    ("rc1.jpg", "C-16", "C-16 (Pk 4.76)", 2.08441508, 41.42286085),
+    ("nc20.jpg", "C-58", "C-58 (Pk 15.24)", 2.09152622, 41.53490494),
+    ("sc69.jpg", "C-31", "C-31 (Pk 195.03)", 2.09797941, 41.33593607),
+    ("sc5.jpg", "C-31", "C-31 (Pk 195.6)", 2.10125826, 41.33995092),
+    ("sc29.jpg", "B-23", "B-23 (Pk 0)", 2.10716918, 41.38256887),
+    ("sc74.jpg", "C-31", "C-31 (Pk 196.93)", 2.11398739, 41.34789866),
+    ("nc15.jpg", "C-58", "C-58 (Pk 7.08)", 2.14170042, 41.50420355),
+    ("nc78.jpg", "AP-7", "AP-7 (Pk 146.5)", 2.14493435, 41.51579061),
+    ("nc89.jpg", "C-58", "C-58 (Pk 6.15)", 2.14807846, 41.49834845),
+    ("nc32.jpg", "C-58", "C-58 (Pk 4.59)", 2.16045724, 41.48727161),
+    ("nc88.jpg", "C-58", "C-58 (Pk 4)", 2.16076267, 41.48289438),
+    ("nc85.jpg", "C-58", "C-58 (Pk 1.82)", 2.17447096, 41.46672712),
+    ("nc87.jpg", "C-58", "C-58 (Pk 0.5)", 2.1849543, 41.45989551),
+    ("nc86.jpg", "Meridiana", "Meridiana (Pk 0)", 2.18923926, 41.45271175),
+    ("nc27.jpg", "C-33", "C-33 (Pk 84.02)", 2.2029206, 41.50742464),
+    ("nc62.jpg", "B-20", "B-20 (Pk 18.41)", 2.20780164, 41.45580745),
+    ("nc2.jpg", "C-31", "C-31 (Pk 209.13)", 2.21762603, 41.42452988),
+    ("nc91.gif", "C-17", "C-17 (Pk 12.05)", 2.22468678, 41.5425895),
+    ("nc3.jpg", "C-31", "C-31 (Pk 210.15)", 2.22474967, 41.43189256),
+    ("nc81.jpg", "B-20", "B-20 (Pk 20)", 2.2315589, 41.46109836),
+    ("nc82.jpg", "C-31", "C-31 (Pk 211.64)", 2.23201704, 41.44322228),
+    ("nc64.jpg", "B-20", "B-20 (Pk 21.2)", 2.2427519, 41.46599061),
+    ("nc83.jpg", "C-31", "C-31 (Pk 213.55)", 2.2487257, 41.45612465),
+    ("nc92.gif", "C-17", "C-17 (Pk 20.5)", 2.26414079, 41.60799388),
+    ("nc8.jpg", "C-31", "C-31 (Pk 215.81)", 2.27239631, 41.46464595),
+    ("nc67.jpg", "B-20", "B-20 (Pk 24.65)", 2.2796547, 41.47105815),
+    ("nc10.jpg", "C-32", "C-32 (Pk 85.05)", 2.29594115, 41.48348883),
+    ("sc58.jpg", "A-2", "A-2 (Pk 608.13)", 2.05, 41.368),
+]
+cache["camaras_sct"] = {
+    "data": [
+        {
+            "id": sct_id,
+            "carretera": carretera,
+            "nom": nom,
+            "lon": lon,
+            "lat": lat,
+            "imagen_url": f"https://mct.gencat.cat/mct2bo/RenderService?sctidcam={sct_id}",
+        }
+        for sct_id, carretera, nom, lon, lat in CAMARAS_SCT
+    ],
+    "updated": now_iso(),
+}
+
+# Càmeres Ajuntament de Barcelona — GIFs de bcn.cat/transit, coords+noms exactes via Cercalia API
+CAMARAS_BCN = [
+    # (img_filename, nom, lon, lat)
+    ("RondadeDaltCrtaEsplugues.gif", "Ronda de Dalt - Ctra. Esplugues", 2.10813038, 41.3892869),
+    ("DiagonalMCristina.gif", "Diagonal - Maria Cristina", 2.12690517, 41.38859686),
+    ("PlCerda.gif", "Plaça Cerdà", 2.13499, 41.3647116),
+    ("RondadeDaltSantGervasi.gif", "Ronda de Dalt - Sant Gervasi", 2.13689443, 41.41544876),
+    ("BalmesMitre.gif", "Balmes - Mitre", 2.14059549, 41.40446586),
+    ("PlPaissosCatalans.gif", "Plaça Països Catalans", 2.14270653, 41.38016698),
+    ("RondaLitoralZonaFranca.gif", "Ronda Litoral - Zona Franca", 2.14686573, 41.3494556),
+    ("PlMolina.gif", "Plaça Molina", 2.14771913, 41.40115845),
+    ("PlEspanya.gif", "Plaça Espanya", 2.14948881, 41.37467276),
+    ("RondadeDaltVelodrom.gif", "Ronda de Dalt - Velòdrom", 2.14971339, 41.43707771),
+    ("AragoPgGracia.gif", "Aragó - Passeig de Gràcia", 2.16502967, 41.39226345),
+    ("BalmesGranVia.gif", "Balmes - Gran Via", 2.16551476, 41.38710852),
+    ("TunelRovira.gif", "Túnel Rovira", 2.16617951, 41.41456966),
+    ("PlCatalunya.gif", "Plaça Catalunya", 2.17014108, 41.38575545),
+    ("PlUrquinaona.gif", "Plaça Urquinaona", 2.17215331, 41.38884717),
+    ("RondaLitoralMollFusta.gif", "Ronda Litoral - Moll de la Fusta", 2.17896254, 41.37657414),
+    ("GranViaMarina.gif", "Gran Via - Marina", 2.18120832, 41.39917663),
+    ("PlAntonioLopez.gif", "Plaça Antonio López", 2.18172935, 41.38176374),
+    ("PlPauVila.gif", "Plaça Pau Vila", 2.18522379, 41.38162165),
+    ("MeridianaFelipII.gif", "Meridiana - Felip II", 2.18688568, 41.42045266),
+    ("MeridianaRioJaneiro.gif", "Meridiana - Rio de Janeiro", 2.18695754, 41.44332367),
+    ("RondadeDaltMeridiana.gif", "Ronda de Dalt - Meridiana", 2.18749653, 41.44696687),
+    ("MarinaPujades.gif", "Marina - Pujades", 2.1891135, 41.39314962),
+    ("DiagonalCiutatdeGranada.gif", "Diagonal - Ciutat de Granada", 2.19057775, 41.40410063),
+    ("GranViaBacRoda.gif", "Gran Via - Bac de Roda", 2.19843801, 41.4117091),
+    ("RondaLitoralBadajoz.gif", "Ronda Litoral - Badajoz", 2.20289366, 41.39293992),
+    ("RondaLitoralBonPastor.gif", "Ronda Litoral - Bon Pastor", 2.21237986, 41.43028353),
+]
+cache["camaras_bcn"] = {
+    "data": [
+        {
+            "id": img,
+            "nom": nom,
+            "lon": lon,
+            "lat": lat,
+            "imagen_url": f"https://www.bcn.cat/transit/imatges/{img}",
+        }
+        for img, nom, lon, lat in CAMARAS_BCN
+    ],
+    "updated": now_iso(),
+}
 
 
 async def poll_metro():
@@ -1937,6 +2145,73 @@ def get_flights(geojson: bool = False):
             ],
         }
     return {"updated": cache["flights"]["updated"], "flights": data}
+
+
+@app.get("/api/camaras_sct")
+def get_camaras_sct(geojson: bool = False):
+    """Càmeres SCT (Generalitat) a carreteres catalanes."""
+    data = cache["camaras_sct"]["data"]
+    if geojson:
+        features = [
+            {
+                "type": "Feature",
+                "properties": {
+                    "id": c["id"],
+                    "nom": c["nom"],
+                    "carretera": c["carretera"],
+                    "imagen_url": c["imagen_url"],
+                },
+                "geometry": {"type": "Point", "coordinates": [c["lon"], c["lat"]]},
+            }
+            for c in data
+        ]
+        return {"type": "FeatureCollection", "updated": cache["camaras_sct"]["updated"], "features": features}
+    return {"updated": cache["camaras_sct"]["updated"], "count": len(data), "camaras": data}
+
+
+@app.get("/api/camaras_dgt")
+def get_camaras_dgt(geojson: bool = False):
+    """Càmeres DGT a Catalunya."""
+    data = cache["camaras_dgt"]["data"]
+    if geojson:
+        features = [
+            {
+                "type": "Feature",
+                "properties": {
+                    "id": c["id"],
+                    "carretera": c["carretera"],
+                    "pk": c["pk"],
+                    "sentido": c["sentido"],
+                    "imagen_url": c["imagen_url"],
+                },
+                "geometry": {"type": "Point", "coordinates": [c["lon"], c["lat"]]},
+            }
+            for c in data
+        ]
+        return {"type": "FeatureCollection", "updated": cache["camaras_dgt"]["updated"], "features": features}
+    return {"updated": cache["camaras_dgt"]["updated"], "count": len(data), "camaras": data}
+
+
+@app.get("/api/camaras_bcn")
+def get_camaras_bcn(geojson: bool = False):
+    """Càmeres de trànsit de l'Ajuntament de Barcelona."""
+    data = cache["camaras_bcn"]["data"]
+    if geojson:
+        features = [
+            {
+                "type": "Feature",
+                "properties": {
+                    "id": c["id"],
+                    "nom": c["nom"],
+                    "imagen_url": c["imagen_url"],
+                    "source": "Ajuntament de Barcelona",
+                },
+                "geometry": {"type": "Point", "coordinates": [c["lon"], c["lat"]]},
+            }
+            for c in data
+        ]
+        return {"type": "FeatureCollection", "updated": cache["camaras_bcn"]["updated"], "features": features}
+    return {"updated": cache["camaras_bcn"]["updated"], "count": len(data), "camaras": data}
 
 
 def _compute_hexbins(points_lonlat, size_deg=0.004):

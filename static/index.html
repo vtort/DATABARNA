@@ -16,10 +16,17 @@
     .stat-value { font-size: 15px; font-weight: 700; }
     #updated { margin-left: auto; font-size: 11px; color: #444; }
     #map { flex: 1; }
-    #layers { position: absolute; top: 70px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
-    .layer-btn { padding: 8px 14px; border-radius: 8px; border: 1px solid #333; background: #111; color: #888; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.15s; }
-    .layer-btn.active { background: #1a1a1a; color: #fff; border-color: #555; }
-    .layer-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    #layers { position: absolute; top: 70px; right: 12px; display: flex; flex-direction: column; gap: 5px; z-index: 10; width: 155px; }
+    .layer-group { background: #0e0e0e; border: 1px solid #1e1e1e; border-radius: 8px; overflow: hidden; }
+    .layer-group-header { padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
+    .layer-group-header span { font-size: 9px; font-weight: 700; color: #555; text-transform: uppercase; letter-spacing: 0.08em; }
+    .layer-group-header::after { content: '▸'; font-size: 9px; color: #333; transition: transform 0.15s; }
+    .layer-group.open .layer-group-header::after { transform: rotate(90deg); }
+    .layer-group-body { display: none; padding: 0 8px 8px; flex-direction: column; gap: 3px; }
+    .layer-group.open .layer-group-body { display: flex; }
+    .layer-btn { padding: 5px 8px; border-radius: 6px; border: 1px solid #1a1a1a; background: transparent; color: #555; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.15s; width: 100%; text-align: left; }
+    .layer-btn.active { border-color: #333; background: #161616; color: #fff; }
+    .layer-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
     #tooltip { position: absolute; pointer-events: none; background: #111; border: 1px solid #333; border-radius: 8px; padding: 10px 14px; font-size: 12px; line-height: 1.6; max-width: 240px; z-index: 20; display: none; }
     #tooltip strong { font-size: 13px; display: block; margin-bottom: 4px; }
     .metro-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; margin-right: 3px; }
@@ -66,33 +73,69 @@
 </div>
 <div id="map"></div>
 <div id="layers">
-  <button class="layer-btn active" onclick="toggleLayer('traffic',this)"><span class="layer-dot" style="background:#ef4444"></span>Trànsit</button>
-  <button class="layer-btn active" onclick="toggleLayer('bicing',this)"><span class="layer-dot" style="background:#3b82f6"></span>Bicing</button>
-  <button class="layer-btn active" onclick="toggleLayer('metro',this)"><span class="layer-dot" style="background:#a855f7"></span>Metro</button>
-  <button class="layer-btn" onclick="toggleLayer('bus',this)"><span class="layer-dot" style="background:#f59e0b"></span>Bus</button>
-  <button class="layer-btn active" onclick="toggleLayer('flights',this)"><span class="layer-dot" style="background:#e2e8f0"></span>Vols</button>
-  <button class="layer-btn active" onclick="toggleLayer('trains',this)"><span class="layer-dot" style="background:#f87171"></span>Rodalies</button>
-  <button class="layer-btn" onclick="toggleLayer('beaches',this)"><span class="layer-dot" style="background:#38bdf8"></span>Platges</button>
-  <button class="layer-btn active" onclick="toggleLayer('obras',this)"><span class="layer-dot" style="background:#fb923c"></span>Obres</button>
-  <button class="layer-btn active" onclick="toggleLayer('ships',this)"><span class="layer-dot" style="background:#94a3b8"></span>Port ⚓</button>
-  <button class="layer-btn" onclick="toggleLayer('air',this)"><span class="layer-dot" style="background:#22c55e"></span>Aire</button>
-  <button class="layer-btn" onclick="toggleLayer('arbres',this)"><span class="layer-dot" style="background:#4ade80"></span>Arbres</button>
-  <button class="layer-btn" onclick="toggleLayer('accidents',this)"><span class="layer-dot" style="background:#fbbf24"></span>Accidents</button>
-  <button class="layer-btn" onclick="toggleLayer('edificis',this)"><span class="layer-dot" style="background:#94a3b8;border-radius:2px"></span>Edificis 3D</button>
-  <button class="layer-btn" onclick="toggleLayer('poblacio',this)"><span class="layer-dot" style="background:#c084fc;border-radius:2px"></span>Densitat</button>
-  <button class="layer-btn" onclick="toggleLayer('zones_verdes',this)"><span class="layer-dot" style="background:#4ade80;border-radius:2px"></span>Zones Verdes</button>
-  <button class="layer-btn" onclick="toggleLayer('soroll',this)"><span class="layer-dot" style="background:#f59e0b;border-radius:2px"></span>Soroll</button>
-  <button class="layer-btn" onclick="toggleLayer('calor',this)"><span class="layer-dot" style="background:#f87171;border-radius:2px"></span>Illa de Calor</button>
-  <button class="layer-btn" onclick="toggleLayer('carrega',this)"><span class="layer-dot" style="background:#34d399"></span>Càrrega EV</button>
-  <button class="layer-btn" onclick="toggleLayer('fonts',this)"><span class="layer-dot" style="background:#38bdf8"></span>Fonts</button>
-  <button class="layer-btn" onclick="toggleLayer('desfibril',this)"><span class="layer-dot" style="background:#f472b6"></span>DEA</button>
-  <button class="layer-btn" onclick="toggleLayer('lavabos',this)"><span class="layer-dot" style="background:#a78bfa"></span>Lavabos</button>
-  <button class="layer-btn" onclick="toggleLayer('equipaments',this)"><span class="layer-dot" style="background:#fb923c;border-radius:2px"></span>Equipaments</button>
-  <button class="layer-btn" onclick="toggleLayer('mercats',this)"><span class="layer-dot" style="background:#facc15;border-radius:2px"></span>Mercats</button>
-  <button class="layer-btn" onclick="toggleLayer('airbnb',this)"><span class="layer-dot" style="background:#ff385c"></span>Airbnb</button>
-  <button class="layer-btn" onclick="toggleLayer('hex_airbnb',this)"><span class="layer-dot" style="background:#ff385c;border-radius:0;clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)"></span>Hex Airbnb</button>
-  <button class="layer-btn" onclick="toggleLayer('hex_accidents',this)"><span class="layer-dot" style="background:#fbbf24;border-radius:0;clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)"></span>Hex Accidents</button>
-  <button class="layer-btn" onclick="toggleLayer('soroll3d',this)"><span class="layer-dot" style="background:linear-gradient(135deg,#1d4ed8,#ef4444);border-radius:2px"></span>3D Soroll</button>
+  <div class="layer-group">
+    <div class="layer-group-header" onclick="this.parentElement.classList.toggle('open')"><span>Transport</span></div>
+    <div class="layer-group-body">
+      <button class="layer-btn" onclick="toggleLayer('traffic',this)"><span class="layer-dot" style="background:#ef4444"></span>Trànsit</button>
+      <button class="layer-btn" onclick="toggleLayer('metro',this)"><span class="layer-dot" style="background:#a855f7"></span>Metro</button>
+      <button class="layer-btn" onclick="toggleLayer('bicing',this)"><span class="layer-dot" style="background:#3b82f6"></span>Bicing</button>
+      <button class="layer-btn" onclick="toggleLayer('bus',this)"><span class="layer-dot" style="background:#f59e0b"></span>Bus</button>
+      <button class="layer-btn" onclick="toggleLayer('trains',this)"><span class="layer-dot" style="background:#f87171"></span>Rodalies</button>
+    </div>
+  </div>
+  <div class="layer-group">
+    <div class="layer-group-header" onclick="this.parentElement.classList.toggle('open')"><span>Cel & Mar</span></div>
+    <div class="layer-group-body">
+      <button class="layer-btn" onclick="toggleLayer('flights',this)"><span class="layer-dot" style="background:#e2e8f0"></span>Vols</button>
+      <button class="layer-btn" onclick="toggleLayer('ships',this)"><span class="layer-dot" style="background:#94a3b8"></span>Port</button>
+    </div>
+  </div>
+  <div class="layer-group">
+    <div class="layer-group-header" onclick="this.parentElement.classList.toggle('open')"><span>Natura</span></div>
+    <div class="layer-group-body">
+      <button class="layer-btn" onclick="toggleLayer('arbres',this)"><span class="layer-dot" style="background:#4ade80"></span>Arbres</button>
+      <button class="layer-btn" onclick="toggleLayer('zones_verdes',this)"><span class="layer-dot" style="background:#4ade80;border-radius:2px"></span>Zones Verdes</button>
+    </div>
+  </div>
+  <div class="layer-group">
+    <div class="layer-group-header" onclick="this.parentElement.classList.toggle('open')"><span>Dades Urbanes</span></div>
+    <div class="layer-group-body">
+      <button class="layer-btn" onclick="toggleLayer('accidents',this)"><span class="layer-dot" style="background:#fbbf24"></span>Accidents</button>
+      <button class="layer-btn" onclick="toggleLayer('obras',this)"><span class="layer-dot" style="background:#fb923c"></span>Obres</button>
+      <button class="layer-btn" onclick="toggleLayer('soroll',this)"><span class="layer-dot" style="background:#f59e0b;border-radius:2px"></span>Soroll</button>
+      <button class="layer-btn" onclick="toggleLayer('air',this)"><span class="layer-dot" style="background:#22c55e"></span>Aire</button>
+      <button class="layer-btn" onclick="toggleLayer('calor',this)"><span class="layer-dot" style="background:#f87171;border-radius:2px"></span>Illa de Calor</button>
+      <button class="layer-btn" onclick="toggleLayer('poblacio',this)"><span class="layer-dot" style="background:#c084fc;border-radius:2px"></span>Densitat</button>
+      <button class="layer-btn" onclick="toggleLayer('airbnb',this)"><span class="layer-dot" style="background:#ff385c"></span>Airbnb</button>
+    </div>
+  </div>
+  <div class="layer-group">
+    <div class="layer-group-header" onclick="this.parentElement.classList.toggle('open')"><span>Càmeres</span></div>
+    <div class="layer-group-body">
+      <button class="layer-btn" onclick="toggleLayer('camaras_dgt',this)"><span class="layer-dot" style="background:#f43f5e;border-radius:2px"></span>DGT Catalunya</button>
+      <button class="layer-btn" onclick="toggleLayer('camaras_sct',this)"><span class="layer-dot" style="background:#fb923c;border-radius:2px"></span>SCT Rondes</button>
+      <button class="layer-btn" onclick="toggleLayer('camaras_bcn',this)"><span class="layer-dot" style="background:#38bdf8;border-radius:2px"></span>Ajuntament BCN</button>
+    </div>
+  </div>
+  <div class="layer-group">
+    <div class="layer-group-header" onclick="this.parentElement.classList.toggle('open')"><span>Visualització 3D</span></div>
+    <div class="layer-group-body">
+      <button class="layer-btn" onclick="toggleLayer('edificis',this)"><span class="layer-dot" style="background:#94a3b8;border-radius:2px"></span>Edificis 3D</button>
+      <button class="layer-btn" onclick="toggleLayer('soroll3d',this)"><span class="layer-dot" style="background:linear-gradient(135deg,#1d4ed8,#ef4444);border-radius:2px"></span>3D Soroll</button>
+    </div>
+  </div>
+  <div class="layer-group">
+    <div class="layer-group-header" onclick="this.parentElement.classList.toggle('open')"><span>Equipaments</span></div>
+    <div class="layer-group-body">
+      <button class="layer-btn" onclick="toggleLayer('beaches',this)"><span class="layer-dot" style="background:#38bdf8"></span>Platges</button>
+      <button class="layer-btn" onclick="toggleLayer('carrega',this)"><span class="layer-dot" style="background:#34d399"></span>Càrrega EV</button>
+      <button class="layer-btn" onclick="toggleLayer('fonts',this)"><span class="layer-dot" style="background:#38bdf8"></span>Fonts</button>
+      <button class="layer-btn" onclick="toggleLayer('lavabos',this)"><span class="layer-dot" style="background:#a78bfa"></span>WC</button>
+      <button class="layer-btn" onclick="toggleLayer('desfibril',this)"><span class="layer-dot" style="background:#f472b6"></span>DEA</button>
+      <button class="layer-btn" onclick="toggleLayer('equipaments',this)"><span class="layer-dot" style="background:#fb923c;border-radius:2px"></span>Equipaments</button>
+      <button class="layer-btn" onclick="toggleLayer('mercats',this)"><span class="layer-dot" style="background:#facc15;border-radius:2px"></span>Mercats</button>
+    </div>
+  </div>
 </div>
 <div id="time-slider">
   <div class="ts-mode">
@@ -110,7 +153,7 @@
 const API=window.location.hostname==='192.168.1.34'?'http://192.168.1.34:8001':'';
 let map;
 const tooltip=document.getElementById('tooltip');
-const layerState={traffic:true,bicing:true,metro:true,air:false,flights:true,trains:true,bus:false,ships:true,beaches:false,obras:true,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false,hex_airbnb:false,hex_accidents:false,soroll3d:false};
+const layerState={traffic:false,bicing:false,metro:false,air:false,flights:false,trains:false,bus:false,ships:false,beaches:false,obras:false,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false,soroll3d:false,camaras_dgt:false,camaras_sct:false,camaras_bcn:false};
 
 (async()=>{
   const cfg=await(await fetch(`${API}/api/config`)).json();
@@ -312,14 +355,7 @@ map.on('load',()=>{
   }});
 
   // ── Hexbins Airbnb ──
-  map.addSource('hex_airbnb',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
-  map.addLayer({id:'hex-airbnb-fill',type:'fill',source:'hex_airbnb',layout:{visibility:'none'},paint:{
-    'fill-color':['interpolate',['linear'],['get','count'],1,'rgba(255,56,92,0.15)',10,'rgba(255,56,92,0.4)',30,'rgba(225,28,62,0.6)',80,'rgba(131,58,180,0.75)',150,'rgba(88,28,135,0.9)'],
-    'fill-outline-color':'rgba(255,255,255,0.08)'
-  }});
-  map.addLayer({id:'hex-airbnb-label',type:'symbol',source:'hex_airbnb',filter:['>',['get','count'],5],layout:{visibility:'none','text-field':['get','count'],'text-size':10,'text-font':['DIN Offc Pro Medium','Arial Unicode MS Bold']},paint:{'text-color':'rgba(255,255,255,0.7)'}});
-
-  // ── Hexbins Accidents ──
+  // ── (hex layers removed) ──
   map.addSource('hex_accidents',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
   map.addLayer({id:'hex-accidents-fill',type:'fill',source:'hex_accidents',layout:{visibility:'none'},paint:{
     'fill-color':['interpolate',['linear'],['get','count'],1,'rgba(253,224,71,0.2)',5,'rgba(251,191,36,0.45)',15,'rgba(249,115,22,0.65)',30,'rgba(239,68,68,0.8)',60,'rgba(127,29,29,0.95)'],
@@ -463,6 +499,104 @@ map.on('load',()=>{
 
   // soroll-3d-lines eliminat — ara els edificis agafen el color del soroll via feature-state
 
+  // ── Càmeres DGT ──
+  map.addSource('camaras_dgt',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'camaras-dgt-circles',type:'circle',source:'camaras_dgt',layout:{visibility:'none'},paint:{
+    'circle-radius':7,
+    'circle-color':'#f43f5e',
+    'circle-stroke-width':1.5,
+    'circle-stroke-color':'#fff',
+    'circle-opacity':0.9,
+  }});
+  map.addLayer({id:'camaras-dgt-labels',type:'symbol',source:'camaras_dgt',layout:{
+    visibility:'none',
+    'text-field':['get','carretera'],
+    'text-size':9,'text-offset':[0,1.4],'text-anchor':'top'
+  },paint:{'text-color':'#f43f5e','text-halo-color':'#000','text-halo-width':1}});
+
+  map.on('click','camaras-dgt-circles',e=>{
+    const p=e.features[0].properties;
+    new mapboxgl.Popup({closeButton:true,maxWidth:'320px'})
+      .setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(`<div class="metro-popup">
+        <h3 style="color:#f43f5e">📷 ${p.carretera} pk${p.pk}</h3>
+        <div class="direction">
+          <div class="train"><span style="color:#94a3b8;font-size:11px">Sentit</span><span class="time" style="margin-left:auto">${p.sentido||'—'}</span></div>
+        </div>
+        <img src="${p.imagen_url}" style="width:100%;margin-top:8px;border-radius:4px;border:1px solid #333"
+          onerror="this.style.display='none';this.nextSibling.style.display='block'">
+        <div style="display:none;color:#666;font-size:11px;padding:8px 0">Imatge no disponible</div>
+        <div style="font-size:9px;color:#444;margin-top:4px;text-align:right">ID: ${p.id}</div>
+      </div>`)
+      .addTo(map);
+  });
+  map.on('mouseenter','camaras-dgt-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','camaras-dgt-circles',()=>map.getCanvas().style.cursor='');
+
+  // ── Càmeres SCT (Rondes + carreteres catalanes) ──
+  map.addSource('camaras_sct',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'camaras-sct-circles',type:'circle',source:'camaras_sct',layout:{visibility:'none'},paint:{
+    'circle-radius':7,
+    'circle-color':'#fb923c',
+    'circle-stroke-width':1.5,
+    'circle-stroke-color':'#fff',
+    'circle-opacity':0.9,
+  }});
+  map.addLayer({id:'camaras-sct-labels',type:'symbol',source:'camaras_sct',layout:{
+    visibility:'none',
+    'text-field':['get','carretera'],
+    'text-size':9,'text-offset':[0,1.4],'text-anchor':'top'
+  },paint:{'text-color':'#fb923c','text-halo-color':'#000','text-halo-width':1}});
+
+  map.on('click','camaras-sct-circles',e=>{
+    const p=e.features[0].properties;
+    const ts=Date.now();
+    new mapboxgl.Popup({closeButton:true,maxWidth:'340px'})
+      .setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(`<div class="metro-popup">
+        <h3 style="color:#fb923c">📷 ${p.nom}</h3>
+        <img src="${p.imagen_url}&t=${ts}" style="width:100%;margin-top:8px;border-radius:4px;border:1px solid #333"
+          onerror="this.style.display='none';this.nextSibling.style.display='block'">
+        <div style="display:none;color:#666;font-size:11px;padding:8px 0">Imatge no disponible</div>
+        <div style="font-size:9px;color:#444;margin-top:4px;text-align:right">SCT · ${p.id}</div>
+      </div>`)
+      .addTo(map);
+  });
+  map.on('mouseenter','camaras-sct-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','camaras-sct-circles',()=>map.getCanvas().style.cursor='');
+
+  // ── Càmeres Ajuntament de Barcelona ──
+  map.addSource('camaras_bcn',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'camaras-bcn-circles',type:'circle',source:'camaras_bcn',layout:{visibility:'none'},paint:{
+    'circle-radius':7,
+    'circle-color':'#38bdf8',
+    'circle-stroke-width':1.5,
+    'circle-stroke-color':'#fff',
+    'circle-opacity':0.9,
+  }});
+  map.addLayer({id:'camaras-bcn-labels',type:'symbol',source:'camaras_bcn',layout:{
+    visibility:'none',
+    'text-field':['get','nom'],
+    'text-size':9,'text-offset':[0,1.4],'text-anchor':'top'
+  },paint:{'text-color':'#38bdf8','text-halo-color':'#000','text-halo-width':1}});
+
+  map.on('click','camaras-bcn-circles',e=>{
+    const p=e.features[0].properties;
+    const ts=Date.now();
+    new mapboxgl.Popup({closeButton:true,maxWidth:'340px'})
+      .setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(`<div class="metro-popup">
+        <h3 style="color:#38bdf8">📷 ${p.nom}</h3>
+        <img src="${p.imagen_url}?hora=${ts}" style="width:100%;margin-top:8px;border-radius:4px;border:1px solid #333"
+          onerror="this.style.display='none';this.nextSibling.style.display='block'">
+        <div style="display:none;color:#666;font-size:11px;padding:8px 0">Imatge no disponible</div>
+        <div style="font-size:9px;color:#444;margin-top:4px;text-align:right">Ajuntament de Barcelona</div>
+      </div>`)
+      .addTo(map);
+  });
+  map.on('mouseenter','camaras-bcn-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','camaras-bcn-circles',()=>map.getCanvas().style.cursor='');
+
   // ── Tooltips ──
   map.on('mousemove','traffic-lines',e=>{const p=e.features[0].properties;showTooltip(e,`<strong>${p.description}</strong>${p.estado_label} · predicció: ${p.prediccion_label}`);});
   map.on('mouseleave','traffic-lines',hideTooltip);
@@ -565,18 +699,6 @@ map.on('load',()=>{
   map.on('mouseenter','carrega-circles',()=>map.getCanvas().style.cursor='pointer');
   map.on('mouseleave','carrega-circles',()=>map.getCanvas().style.cursor='');
 
-  map.on('mousemove','hex-airbnb-fill',e=>{
-    const p=e.features[0].properties;
-    const pct=p.avg_val!=null?Math.round(p.avg_val*100)+'% amb llicència':'';
-    showTooltip(e,`<b>🏠 Airbnb</b><br>${p.count} pisos${pct?`<br><small>${pct}</small>`:''}`);
-  });
-  map.on('mouseleave','hex-airbnb-fill',hideTooltip);
-
-  map.on('mousemove','hex-accidents-fill',e=>{
-    const p=e.features[0].properties;
-    showTooltip(e,`<b>⚠️ Accidents</b><br>${p.count} accidents (2024-2025)`);
-  });
-  map.on('mouseleave','hex-accidents-fill',hideTooltip);
 
   map.on('mousemove','airbnb-points',e=>{
     const p=e.features[0].properties;
@@ -753,6 +875,16 @@ map.on('load',()=>{
     map.on('mouseleave',l,()=>map.getCanvas().style.cursor='');
   });
 
+  // Amaga totes les capes al init — l'usuari les activa manualment
+  const _hide=id=>{try{map.setLayoutProperty(id,'visibility','none');}catch(e){}};
+  _hide('traffic-lines');
+  _hide('bicing-circles');_hide('bicing-labels');
+  _hide('metro-circles');_hide('metro-labels');
+  _hide('flights-symbols');_hide('flights-labels');
+  _hide('ships-circles');_hide('ships-labels');
+  _hide('trains-circles');_hide('trains-labels');
+  _hide('obras-circles');_hide('obras-labels');
+
   fetchAll();
   setInterval(fetchAll,60000);
 });
@@ -772,9 +904,11 @@ async function fetchAll(){
   fetchEquipaments();
   fetchMercats();
   fetchAirbnb();
-  fetchHexAirbnb();
-  fetchHexAccidents();
-  setInterval(fetchFlights,15000);
+  fetchCamarasDgt();
+  fetchCamarasSct();
+  fetchCamarasBcn();
+
+  setInterval(fetchFlights,60000);
   setInterval(fetchTrains,20000);
   document.getElementById('updated').textContent='actualitzat '+new Date().toLocaleTimeString('ca');
 }
@@ -872,14 +1006,19 @@ async function fetchAirbnb(){
   const data=await(await fetch(`${API}/api/airbnb`)).json();
   map.getSource('airbnb').setData(data);
 }
-async function fetchHexAirbnb(){
-  const data=await(await fetch(`${API}/api/hexbins/airbnb`)).json();
-  map.getSource('hex_airbnb').setData(data);
+async function fetchCamarasDgt(){
+  const data=await(await fetch(`${API}/api/camaras_dgt?geojson=true`)).json();
+  map.getSource('camaras_dgt').setData(data);
 }
-async function fetchHexAccidents(){
-  const data=await(await fetch(`${API}/api/hexbins/accidents`)).json();
-  map.getSource('hex_accidents').setData(data);
+async function fetchCamarasSct(){
+  const data=await(await fetch(`${API}/api/camaras_sct?geojson=true`)).json();
+  map.getSource('camaras_sct').setData(data);
 }
+async function fetchCamarasBcn(){
+  const data=await(await fetch(`${API}/api/camaras_bcn?geojson=true`)).json();
+  map.getSource('camaras_bcn').setData(data);
+}
+
 async function fetchSoroll3d(){
   // ja usa la mateixa source que soroll — no cal re-fetch
 }
@@ -925,8 +1064,6 @@ function toggleLayer(layer,btn){
   if(layer==='obras'){map.setLayoutProperty('obras-circles','visibility',vis);map.setLayoutProperty('obras-labels','visibility',vis);updateSliderVisibility();return;}
   if(layer==='carrega')map.setLayoutProperty('carrega-circles','visibility',vis);
   if(layer==='airbnb'){map.setLayoutProperty('airbnb-clusters','visibility',vis);map.setLayoutProperty('airbnb-cluster-count','visibility',vis);map.setLayoutProperty('airbnb-points','visibility',vis);}
-  if(layer==='hex_airbnb'){map.setLayoutProperty('hex-airbnb-fill','visibility',vis);map.setLayoutProperty('hex-airbnb-label','visibility',vis);}
-  if(layer==='hex_accidents'){map.setLayoutProperty('hex-accidents-fill','visibility',vis);map.setLayoutProperty('hex-accidents-label','visibility',vis);}
   if(layer==='soroll3d'){
     if(layerState['soroll3d']){
       // Carrega soroll si no té dades, espera i activa
@@ -951,6 +1088,9 @@ function toggleLayer(layer,btn){
   }
   if(layer==='equipaments')map.setLayoutProperty('equipaments-circles','visibility',vis);
   if(layer==='mercats')map.setLayoutProperty('mercats-circles','visibility',vis);
+  if(layer==='camaras_dgt'){map.setLayoutProperty('camaras-dgt-circles','visibility',vis);map.setLayoutProperty('camaras-dgt-labels','visibility',vis);}
+  if(layer==='camaras_sct'){map.setLayoutProperty('camaras-sct-circles','visibility',vis);map.setLayoutProperty('camaras-sct-labels','visibility',vis);}
+  if(layer==='camaras_bcn'){map.setLayoutProperty('camaras-bcn-circles','visibility',vis);map.setLayoutProperty('camaras-bcn-labels','visibility',vis);}
   if(layer==='fonts')map.setLayoutProperty('fonts-circles','visibility',vis);
   if(layer==='desfibril')map.setLayoutProperty('desfibril-circles','visibility',vis);
   if(layer==='lavabos')map.setLayoutProperty('lavabos-circles','visibility',vis);
@@ -969,7 +1109,8 @@ function toggleLayer(layer,btn){
 }
 // ── Soroll 3D — Spatial join client-side ─────────────────────────────────────
 let _sorollGridIdx=null;
-const _SCELL=0.008; // ~800m grid cells per indexar segments
+const _SCELL=0.006;
+const _paintedBuildings=new Set(); // IDs ja processats — no cal repetir
 
 function _buildSorollIndex(){
   const src=map.getSource('soroll');
@@ -987,6 +1128,7 @@ function _buildSorollIndex(){
     }
   }
   _sorollGridIdx=idx;
+  _paintedBuildings.clear();
 }
 
 function _nearestDb(lon,lat){
@@ -1012,13 +1154,16 @@ function _paintBuildingsNoise(){
   if(!_sorollGridIdx) _buildSorollIndex();
   if(!_sorollGridIdx) return;
   const buildings=map.queryRenderedFeatures({layers:['edificis-3d']});
-  for(const b of buildings){
-    if(b.id==null) continue;
-    // centroide aproximat agafant la primera coordenada del primer ring
+  // Només processa edificis nous — els ja pintats no es toquen
+  const news=buildings.filter(b=>b.id!=null&&!_paintedBuildings.has(b.id));
+  for(const b of news){
     let lon,lat;
     try{[lon,lat]=b.geometry.coordinates[0][0];}catch(e){continue;}
     const db=_nearestDb(lon,lat);
-    if(db!=null) map.setFeatureState({source:'composite',sourceLayer:'building',id:b.id},{noise:db});
+    if(db!=null){
+      map.setFeatureState({source:'composite',sourceLayer:'building',id:b.id},{noise:db});
+      _paintedBuildings.add(b.id);
+    }
   }
 }
 
