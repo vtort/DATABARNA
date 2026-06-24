@@ -716,6 +716,7 @@ map.on('load',()=>{
     const p=e.features[0].properties;
     const coords=e.features[0].geometry.coordinates.slice();
     let html='';
+    const hlsUrl=API+p.url;
     if(p.tipus==='hls'){
       html=`<div class="metro-popup">
         <h3 style="color:#a78bfa">📹 ${p.nom}</h3>
@@ -747,10 +748,10 @@ map.on('load',()=>{
         if(!vid) return;
         if(window.Hls && Hls.isSupported()){
           const h=new Hls();
-          h.loadSource(p.url);
+          h.loadSource(hlsUrl);
           h.attachMedia(vid);
         } else if(vid.canPlayType('application/vnd.apple.mpegurl')){
-          vid.src=p.url;
+          vid.src=hlsUrl;
         }
       });
     }
@@ -1315,7 +1316,7 @@ function toggleLayer(layer,btn){
   if(layer==='camaras_dgt'){map.setLayoutProperty('camaras-dgt-circles','visibility',vis);map.setLayoutProperty('camaras-dgt-labels','visibility',vis);}
   if(layer==='camaras_sct'){map.setLayoutProperty('camaras-sct-circles','visibility',vis);map.setLayoutProperty('camaras-sct-labels','visibility',vis);}
   if(layer==='camaras_bcn'){map.setLayoutProperty('camaras-bcn-circles','visibility',vis);map.setLayoutProperty('camaras-bcn-labels','visibility',vis);}
-  if(layer==='camaras_live'){map.setLayoutProperty('camaras-live-circles','visibility',vis);map.setLayoutProperty('camaras-live-labels','visibility',vis);if(on)fetchCamarasLive();}
+  if(layer==='camaras_live'){map.setLayoutProperty('camaras-live-circles','visibility',vis);map.setLayoutProperty('camaras-live-labels','visibility',vis);if(layerState[layer])fetchCamarasLive();}
   if(layer==='metro_trains'){
     if(map.getLayer('metro-trains-arrow')) map.setLayoutProperty('metro-trains-arrow','visibility',vis);
     if(vis==='visible') startMetroTrainsLoop(); else stopMetroTrainsLoop();

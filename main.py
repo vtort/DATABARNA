@@ -93,7 +93,7 @@ CAMARAS_LIVE = [
         "nom": "Port Olímpic — Marina Llevant",
         "lat": 41.3898, "lon": 2.2025,
         "tipus": "hls",
-        "url": "https://streamingcameresport.bsmsa.eu/videos/llevant.m3u8",
+        "url": "/api/hls/llevant/index.m3u8",
         "font": "BSM",
     },
     {
@@ -101,7 +101,7 @@ CAMARAS_LIVE = [
         "nom": "Port Olímpic — Garbí (Hotel Arts)",
         "lat": 41.3876, "lon": 2.1978,
         "tipus": "hls",
-        "url": "https://streamingcameresport.bsmsa.eu/videos/garbi.m3u8",
+        "url": "/api/hls/garbi/index.m3u8",
         "font": "BSM",
     },
     {
@@ -155,7 +155,7 @@ async def poll_3cat_snapshots():
         if cam["tipus"] != "snapshot":
             continue
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True, verify=False) as client:
                 r = await client.get(cam["scrape_url"], headers={"User-Agent": "Mozilla/5.0"})
             m = _re.search(r"beauties/v1/img/([0-9/]+\.jpg)", r.text)
             if m:
@@ -2543,6 +2543,46 @@ def get_camaras_bcn(geojson: bool = False):
         ]
         return {"type": "FeatureCollection", "updated": cache["camaras_bcn"]["updated"], "features": features}
     return {"updated": cache["camaras_bcn"]["updated"], "count": len(data), "camaras": data}
+
+
+BSM_STREAMS = {"llevant", "garbi"}
+BSM_BASE = "https://streamingcameresport.bsmsa.eu/videos"
+
+
+@app.get("/api/hls/{name}/index.m3u8")
+async def hls_proxy_playlist(name: str):
+    """Proxy m3u8 de BSM reescrivint els segments per evitar CORS."""
+    if name not in BSM_STREAMS:
+        return JSONResponse(status_code=404, content={"error": "stream not found"})
+    try:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
+            r = await client.get(f"{BSM_BASE}/{name}.m3u8")
+        lines = []
+        for line in r.text.splitlines():
+            if line.endswith(".ts"):
+                lines.append(f"/api/hls/{name}/{line}")
+            else:
+                lines.append(line)
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("\n".join(lines), media_type="application/vnd.apple.mpegurl",
+                                 headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache"})
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@app.get("/api/hls/{name}/{segment}")
+async def hls_proxy_segment(name: str, segment: str):
+    """Proxy segments .ts de BSM."""
+    if name not in BSM_STREAMS or not segment.endswith(".ts"):
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    try:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
+            r = await client.get(f"{BSM_BASE}/{segment}")
+        from fastapi.responses import Response
+        return Response(content=r.content, media_type="video/mp2t",
+                        headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=60"})
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
 
 
 @app.get("/api/camaras_live")
