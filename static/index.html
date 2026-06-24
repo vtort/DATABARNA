@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0a0a0a; color: #fff; font-family: -apple-system, sans-serif; height: 100vh; display: flex; flex-direction: column; }
@@ -125,6 +126,7 @@
   <div class="layer-group">
     <div class="layer-group-header" onclick="this.parentElement.classList.toggle('open')"><span>Càmeres</span></div>
     <div class="layer-group-body">
+      <button class="layer-btn" onclick="toggleLayer('camaras_live',this)"><span class="layer-dot" style="background:#a78bfa;border-radius:2px"></span>Live (BSM + 3Cat)</button>
       <button class="layer-btn" onclick="toggleLayer('camaras_dgt',this)"><span class="layer-dot" style="background:#f43f5e;border-radius:2px"></span>DGT Catalunya</button>
       <button class="layer-btn" onclick="toggleLayer('camaras_sct',this)"><span class="layer-dot" style="background:#fb923c;border-radius:2px"></span>SCT Rondes</button>
       <button class="layer-btn" onclick="toggleLayer('camaras_bcn',this)"><span class="layer-dot" style="background:#38bdf8;border-radius:2px"></span>Ajuntament BCN</button>
@@ -166,7 +168,7 @@
 const API=window.location.hostname==='192.168.1.34'?'http://192.168.1.34:8001':'';
 let map;
 const tooltip=document.getElementById('tooltip');
-const layerState={traffic:false,bicing:false,metro:false,metro_routes:false,air:false,flights:false,trains:false,bus:false,ships:false,beaches:false,obras:false,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false,soroll3d:false,camaras_dgt:false,camaras_sct:false,camaras_bcn:false,metro_trains:false};
+const layerState={traffic:false,bicing:false,metro:false,metro_routes:false,air:false,flights:false,trains:false,bus:false,ships:false,beaches:false,obras:false,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false,soroll3d:false,camaras_dgt:false,camaras_sct:false,camaras_bcn:false,camaras_live:false,metro_trains:false};
 
 (async()=>{
   const cfg=await(await fetch(`${API}/api/config`)).json();
@@ -695,6 +697,67 @@ map.on('load',()=>{
   map.on('mouseenter','camaras-bcn-circles',()=>map.getCanvas().style.cursor='pointer');
   map.on('mouseleave','camaras-bcn-circles',()=>map.getCanvas().style.cursor='');
 
+  // ── Càmeres Live (BSM HLS + 3Cat + ipcamlive) ──
+  map.addSource('camaras_live',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'camaras-live-circles',type:'circle',source:'camaras_live',layout:{visibility:'none'},paint:{
+    'circle-radius':9,
+    'circle-color':'#a78bfa',
+    'circle-stroke-width':2,
+    'circle-stroke-color':'#fff',
+    'circle-opacity':0.95,
+  }});
+  map.addLayer({id:'camaras-live-labels',type:'symbol',source:'camaras_live',layout:{
+    visibility:'none',
+    'text-field':['get','nom'],
+    'text-size':9,'text-offset':[0,1.6],'text-anchor':'top'
+  },paint:{'text-color':'#a78bfa','text-halo-color':'#000','text-halo-width':1}});
+
+  map.on('click','camaras-live-circles',e=>{
+    const p=e.features[0].properties;
+    const coords=e.features[0].geometry.coordinates.slice();
+    let html='';
+    if(p.tipus==='hls'){
+      html=`<div class="metro-popup">
+        <h3 style="color:#a78bfa">📹 ${p.nom}</h3>
+        <video id="hlsvid_${p.id}" controls autoplay muted playsinline style="width:100%;margin-top:8px;border-radius:4px;background:#000;max-height:200px"></video>
+        <div style="font-size:9px;color:#555;margin-top:4px;text-align:right">${p.font} · HLS Live</div>
+      </div>`;
+    } else if(p.tipus==='snapshot'){
+      const ts=Date.now();
+      html=`<div class="metro-popup">
+        <h3 style="color:#a78bfa">📷 ${p.nom}</h3>
+        <img id="snap_${p.id}" src="${p.url}?t=${ts}" style="width:100%;margin-top:8px;border-radius:4px;border:1px solid #333"
+          onerror="this.src='';this.style.opacity=0.3">
+        <div style="font-size:9px;color:#555;margin-top:4px;text-align:right">${p.font} · cada ~10min</div>
+      </div>`;
+    } else if(p.tipus==='iframe'){
+      html=`<div class="metro-popup">
+        <h3 style="color:#a78bfa">📹 ${p.nom}</h3>
+        <iframe src="${p.url}" style="width:100%;height:180px;border:none;border-radius:4px;margin-top:8px" allowfullscreen></iframe>
+        <div style="font-size:9px;color:#555;margin-top:4px;text-align:right">${p.font} · Live</div>
+      </div>`;
+    }
+    const popup=new mapboxgl.Popup({closeButton:true,maxWidth:'360px'})
+      .setLngLat(coords)
+      .setHTML(html)
+      .addTo(map);
+    if(p.tipus==='hls'){
+      popup.on('open',()=>{
+        const vid=document.getElementById(`hlsvid_${p.id}`);
+        if(!vid) return;
+        if(window.Hls && Hls.isSupported()){
+          const h=new Hls();
+          h.loadSource(p.url);
+          h.attachMedia(vid);
+        } else if(vid.canPlayType('application/vnd.apple.mpegurl')){
+          vid.src=p.url;
+        }
+      });
+    }
+  });
+  map.on('mouseenter','camaras-live-circles',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','camaras-live-circles',()=>map.getCanvas().style.cursor='');
+
   // ── Tooltips ──
   map.on('mousemove','traffic-lines',e=>{const p=e.features[0].properties;showTooltip(e,`<strong>${p.description}</strong>${p.estado_label} · predicció: ${p.prediccion_label}`);});
   map.on('mouseleave','traffic-lines',hideTooltip);
@@ -1116,6 +1179,10 @@ async function fetchCamarasBcn(){
   const data=await(await fetch(`${API}/api/camaras_bcn?geojson=true`)).json();
   map.getSource('camaras_bcn').setData(data);
 }
+async function fetchCamarasLive(){
+  const data=await(await fetch(`${API}/api/camaras_live`)).json();
+  map.getSource('camaras_live').setData(data);
+}
 
 async function fetchSoroll3d(){
   // ja usa la mateixa source que soroll — no cal re-fetch
@@ -1248,6 +1315,7 @@ function toggleLayer(layer,btn){
   if(layer==='camaras_dgt'){map.setLayoutProperty('camaras-dgt-circles','visibility',vis);map.setLayoutProperty('camaras-dgt-labels','visibility',vis);}
   if(layer==='camaras_sct'){map.setLayoutProperty('camaras-sct-circles','visibility',vis);map.setLayoutProperty('camaras-sct-labels','visibility',vis);}
   if(layer==='camaras_bcn'){map.setLayoutProperty('camaras-bcn-circles','visibility',vis);map.setLayoutProperty('camaras-bcn-labels','visibility',vis);}
+  if(layer==='camaras_live'){map.setLayoutProperty('camaras-live-circles','visibility',vis);map.setLayoutProperty('camaras-live-labels','visibility',vis);if(on)fetchCamarasLive();}
   if(layer==='metro_trains'){
     if(map.getLayer('metro-trains-arrow')) map.setLayoutProperty('metro-trains-arrow','visibility',vis);
     if(vis==='visible') startMetroTrainsLoop(); else stopMetroTrainsLoop();

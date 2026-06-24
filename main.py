@@ -83,7 +83,85 @@ cache = {
     "equipaments": {"data": None, "updated": None},
     "mercats": {"data": None, "updated": None},
     "airbnb": {"data": None, "updated": None},
+    "camaras_live_snapshots": {},  # cam_id -> current image URL
 }
+
+# ── Càmeres Live ──────────────────────────────────────────────────────────────
+CAMARAS_LIVE = [
+    {
+        "id": "bsm_llevant",
+        "nom": "Port Olímpic — Marina Llevant",
+        "lat": 41.3898, "lon": 2.2025,
+        "tipus": "hls",
+        "url": "https://streamingcameresport.bsmsa.eu/videos/llevant.m3u8",
+        "font": "BSM",
+    },
+    {
+        "id": "bsm_garbi",
+        "nom": "Port Olímpic — Garbí (Hotel Arts)",
+        "lat": 41.3876, "lon": 2.1978,
+        "tipus": "hls",
+        "url": "https://streamingcameresport.bsmsa.eu/videos/garbi.m3u8",
+        "font": "BSM",
+    },
+    {
+        "id": "3cat_portolimpic",
+        "nom": "Port Olímpic (Panoràmica)",
+        "lat": 41.3910, "lon": 2.2020,
+        "tipus": "snapshot",
+        "scrape_url": "https://www.3cat.cat/el-temps/port-olimpic-barcelona/camera/1/",
+        "font": "3Cat Meteo",
+    },
+    {
+        "id": "3cat_collserola",
+        "nom": "Collserola (Vista aèria BCN)",
+        "lat": 41.4178, "lon": 2.1195,
+        "tipus": "snapshot",
+        "scrape_url": "https://www.3cat.cat/el-temps/collserola-barcelona/camera/2/",
+        "font": "3Cat Meteo",
+    },
+    {
+        "id": "3cat_rambla",
+        "nom": "La Rambla",
+        "lat": 41.3827, "lon": 2.1736,
+        "tipus": "snapshot",
+        "scrape_url": "https://www.3cat.cat/el-temps/la-rambla-barcelona/camera/60/",
+        "font": "3Cat Meteo",
+    },
+    {
+        "id": "3cat_artssantamonica",
+        "nom": "Arts Santa Mònica (Colom)",
+        "lat": 41.3789, "lon": 2.1742,
+        "tipus": "snapshot",
+        "scrape_url": "https://www.3cat.cat/el-temps/arts-santa-monica-barcelona/camera/53/",
+        "font": "3Cat Meteo",
+    },
+    {
+        "id": "ipcam_sagradafamilia",
+        "nom": "Sagrada Família",
+        "lat": 41.4036, "lon": 2.1744,
+        "tipus": "iframe",
+        "url": "https://g2.ipcamlive.com/player/player.php?alias=sagradafamilia",
+        "font": "ipcamlive",
+    },
+]
+
+
+async def poll_3cat_snapshots():
+    """Actualitza les URLs de les captures 3Cat cada 10 minuts."""
+    import re as _re
+    snapshots = cache["camaras_live_snapshots"]
+    for cam in CAMARAS_LIVE:
+        if cam["tipus"] != "snapshot":
+            continue
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(cam["scrape_url"], headers={"User-Agent": "Mozilla/5.0"})
+            m = _re.search(r"beauties/v1/img/([0-9/]+\.jpg)", r.text)
+            if m:
+                snapshots[cam["id"]] = f"https://statics.3cat.cat/meteo/{m.group()}"
+        except Exception as e:
+            print(f"[3cat_snapshot] {cam['id']} error: {e}")
 
 # GeoJSON estático de trams (se carga una vez al inicio)
 trams_geo = {}  # id -> {description, coords: [[lon,lat],...]}
@@ -1130,6 +1208,13 @@ async def poll_mercats():
         cache["mercats"]["updated"] = now_iso()
 
 
+async def snapshots_loop():
+    """Refresca captures 3Cat cada 10 minuts."""
+    while True:
+        await poll_3cat_snapshots()
+        await asyncio.sleep(600)
+
+
 async def slow_poll_loop():
     """Datos que cambian poco: cada 6h."""
     while True:
@@ -1299,6 +1384,7 @@ async def startup():
     asyncio.create_task(flights_loop())
     asyncio.create_task(camaras_dgt_loop())
     asyncio.create_task(slow_poll_loop())
+    asyncio.create_task(snapshots_loop())
     asyncio.create_task(persist_loop())
 
 
@@ -2457,6 +2543,32 @@ def get_camaras_bcn(geojson: bool = False):
         ]
         return {"type": "FeatureCollection", "updated": cache["camaras_bcn"]["updated"], "features": features}
     return {"updated": cache["camaras_bcn"]["updated"], "count": len(data), "camaras": data}
+
+
+@app.get("/api/camaras_live")
+def get_camaras_live():
+    """Càmeres live: BSM HLS, 3Cat snapshots, ipcamlive."""
+    snapshots = cache["camaras_live_snapshots"]
+    features = []
+    for cam in CAMARAS_LIVE:
+        props = {
+            "id": cam["id"],
+            "nom": cam["nom"],
+            "tipus": cam["tipus"],
+            "font": cam["font"],
+        }
+        if cam["tipus"] == "hls":
+            props["url"] = cam["url"]
+        elif cam["tipus"] == "snapshot":
+            props["url"] = snapshots.get(cam["id"], "")
+        elif cam["tipus"] == "iframe":
+            props["url"] = cam["url"]
+        features.append({
+            "type": "Feature",
+            "properties": props,
+            "geometry": {"type": "Point", "coordinates": [cam["lon"], cam["lat"]]},
+        })
+    return {"type": "FeatureCollection", "features": features}
 
 
 def _compute_hexbins(points_lonlat, size_deg=0.004):
