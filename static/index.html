@@ -738,12 +738,12 @@ map.on('load',()=>{
         <div style="font-size:9px;color:#555;margin-top:4px;text-align:right">${p.font} · Live</div>
       </div>`;
     }
-    const popup=new mapboxgl.Popup({closeButton:true,maxWidth:'360px'})
+    new mapboxgl.Popup({closeButton:true,maxWidth:'360px'})
       .setLngLat(coords)
       .setHTML(html)
       .addTo(map);
     if(p.tipus==='hls'){
-      popup.on('open',()=>{
+      setTimeout(()=>{
         const vid=document.getElementById(`hlsvid_${p.id}`);
         if(!vid) return;
         if(window.Hls && Hls.isSupported()){
@@ -753,7 +753,7 @@ map.on('load',()=>{
         } else if(vid.canPlayType('application/vnd.apple.mpegurl')){
           vid.src=hlsUrl;
         }
-      });
+      },100);
     }
   });
   map.on('mouseenter','camaras-live-circles',()=>map.getCanvas().style.cursor='pointer');
