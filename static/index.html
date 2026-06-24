@@ -26,6 +26,12 @@
     .layer-group.open .layer-group-body { display: flex; }
     .layer-btn { padding: 5px 8px; border-radius: 6px; border: 1px solid #1a1a1a; background: transparent; color: #555; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.15s; width: 100%; text-align: left; }
     .layer-btn.active { border-color: #333; background: #161616; color: #fff; }
+    .sub-group { width: 100%; }
+    .sub-group-header { padding: 5px 8px; border-radius: 6px; border: 1px solid #1a1a1a; background: transparent; color: #555; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; user-select: none; }
+    .sub-group-header::after { content: '▸'; font-size: 8px; color: #333; margin-left: auto; transition: transform 0.15s; }
+    .sub-group.open .sub-group-header::after { transform: rotate(90deg); }
+    .sub-group-body { display: none; flex-direction: column; gap: 3px; padding: 4px 0 0 10px; }
+    .sub-group.open .sub-group-body { display: flex; }
     .layer-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
     #tooltip { position: absolute; pointer-events: none; background: #111; border: 1px solid #333; border-radius: 8px; padding: 10px 14px; font-size: 12px; line-height: 1.6; max-width: 240px; z-index: 20; display: none; }
     #tooltip strong { font-size: 13px; display: block; margin-bottom: 4px; }
@@ -77,9 +83,14 @@
     <div class="layer-group-header" onclick="this.parentElement.classList.toggle('open')"><span>Transport</span></div>
     <div class="layer-group-body">
       <button class="layer-btn" onclick="toggleLayer('traffic',this)"><span class="layer-dot" style="background:#ef4444"></span>Trànsit</button>
-      <button class="layer-btn" onclick="toggleLayer('metro_routes',this)"><span class="layer-dot" style="background:linear-gradient(135deg,#e3000b 33%,#009f6b 66%,#ffcc00);border-radius:2px"></span>Línies metro</button>
-      <button class="layer-btn" onclick="toggleLayer('metro',this)"><span class="layer-dot" style="background:#a855f7"></span>Metro estacions</button>
-      <button class="layer-btn" onclick="toggleLayer('metro_trains',this)"><span class="layer-dot" style="background:#fff;border:2px solid #a855f7;border-radius:50%"></span>Trens en viu</button>
+      <div class="sub-group" id="sg-metro">
+        <div class="sub-group-header" onclick="document.getElementById('sg-metro').classList.toggle('open')"><span class="layer-dot" style="background:linear-gradient(135deg,#e3000b 33%,#009f6b 66%,#ffcc00);border-radius:2px"></span>Metro</div>
+        <div class="sub-group-body">
+          <button class="layer-btn" onclick="toggleLayer('metro_routes',this)"><span class="layer-dot" style="background:linear-gradient(135deg,#e3000b 33%,#009f6b 66%,#ffcc00);border-radius:2px"></span>Línies</button>
+          <button class="layer-btn" onclick="toggleLayer('metro',this)"><span class="layer-dot" style="background:#a855f7"></span>Estacions</button>
+          <button class="layer-btn" onclick="toggleLayer('metro_trains',this)"><span class="layer-dot" style="background:#fff;border:2px solid #a855f7;border-radius:50%"></span>Trens en viu</button>
+        </div>
+      </div>
       <button class="layer-btn" onclick="toggleLayer('bicing',this)"><span class="layer-dot" style="background:#3b82f6"></span>Bicing</button>
       <button class="layer-btn" onclick="toggleLayer('bus',this)"><span class="layer-dot" style="background:#f59e0b"></span>Bus</button>
       <button class="layer-btn" onclick="toggleLayer('trains',this)"><span class="layer-dot" style="background:#f87171"></span>Rodalies</button>
@@ -162,7 +173,29 @@ const layerState={traffic:false,bicing:false,metro:false,metro_routes:false,air:
   mapboxgl.accessToken=cfg.mapbox_token;
   map=new mapboxgl.Map({container:'map',style:'mapbox://styles/mapbox/dark-v11',center:[2.1734,41.3851],zoom:12});
 
+// ── Imatge SDF fletxa tren ────────────────────────────────────────────────────
+function _makeTrainArrow(){
+  const sz=32, cx=sz/2;
+  const canvas=document.createElement('canvas');
+  canvas.width=sz; canvas.height=sz;
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle='#fff';
+  ctx.beginPath();
+  // Punta amunt (0° = nord). Xevron estil fletxa militar.
+  ctx.moveTo(cx, 3);          // punta
+  ctx.lineTo(cx+11, cx+3);    // espatlla dreta
+  ctx.lineTo(cx+6,  cx+3);    // cintura dreta
+  ctx.lineTo(cx+6,  sz-4);    // cua dreta
+  ctx.lineTo(cx-6,  sz-4);    // cua esquerra
+  ctx.lineTo(cx-6,  cx+3);    // cintura esquerra
+  ctx.lineTo(cx-11, cx+3);    // espatlla esquerra
+  ctx.closePath();
+  ctx.fill();
+  return ctx.getImageData(0,0,sz,sz);
+}
+
 map.on('load',()=>{
+  map.addImage('train-arrow', _makeTrainArrow(), {sdf:true});
   // ── Trànsit ──
   map.addSource('traffic',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
   map.addLayer({id:'traffic-lines',type:'line',source:'traffic',layout:{'line-join':'round','line-cap':'round'},paint:{
@@ -228,29 +261,30 @@ map.on('load',()=>{
 
   // ── Trens metro en viu ──
   map.addSource('metro_trains',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
-  map.addLayer({id:'metro-trains-halo',type:'circle',source:'metro_trains',layout:{visibility:'none'},paint:{
-    'circle-radius':10,
-    'circle-color':['get','color'],
-    'circle-opacity':0.18,
-    'circle-blur':1,
-  }});
-  map.addLayer({id:'metro-trains-dot',type:'circle',source:'metro_trains',layout:{visibility:'none'},paint:{
-    'circle-radius':6,
-    'circle-color':['get','color'],
-    'circle-stroke-width':2,
-    'circle-stroke-color':'#fff',
-    'circle-opacity':1,
-  }});
-  map.addLayer({id:'metro-trains-label',type:'symbol',source:'metro_trains',layout:{
+  map.addLayer({id:'metro-trains-arrow',type:'symbol',source:'metro_trains',layout:{
     visibility:'none',
+    'icon-image':'train-arrow',
+    'icon-size':['interpolate',['linear'],['zoom'],10,0.5,15,0.9],
+    'icon-rotate':['get','bearing'],
+    'icon-rotation-alignment':'map',
+    'icon-allow-overlap':true,
+    'icon-ignore-placement':true,
     'text-field':['get','linia'],
-    'text-size':8,
-    'text-offset':[0,-1.4],
-    'text-anchor':'bottom',
+    'text-size':9,
+    'text-offset':[0,1.8],
+    'text-anchor':'top',
     'text-allow-overlap':true,
-  },paint:{'text-color':'#fff','text-halo-color':'#000','text-halo-width':1}});
+    'text-ignore-placement':true,
+  },paint:{
+    'icon-color':['get','color'],
+    'icon-halo-color':'rgba(0,0,0,0.7)',
+    'icon-halo-width':1.5,
+    'text-color':['get','color'],
+    'text-halo-color':'#000',
+    'text-halo-width':1,
+  }});
 
-  map.on('click','metro-trains-dot',e=>{
+  map.on('click','metro-trains-arrow',e=>{
     const p=e.features[0].properties;
     new mapboxgl.Popup({closeButton:true,maxWidth:'220px'})
       .setLngLat(e.features[0].geometry.coordinates)
@@ -261,8 +295,8 @@ map.on('load',()=>{
       </div>`)
       .addTo(map);
   });
-  map.on('mouseenter','metro-trains-dot',()=>map.getCanvas().style.cursor='pointer');
-  map.on('mouseleave','metro-trains-dot',()=>map.getCanvas().style.cursor='');
+  map.on('mouseenter','metro-trains-arrow',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','metro-trains-arrow',()=>map.getCanvas().style.cursor='');
 
   // ── Vuelos ──
   map.addSource('flights',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
@@ -1110,7 +1144,7 @@ const METRO_ANIM_SPEED=0.000008; // graus/ms ≈ ~40km/h en equidistant lat/lon
 function _trainsToGeoJSON(trains){
   return {type:'FeatureCollection',features:trains.map(t=>({
     type:'Feature',
-    properties:{linia:t.linia,color:t.color,desti:t.desti,eta_s:t.eta_s,is_real:t.is_real},
+    properties:{linia:t.linia,color:t.color,desti:t.desti,eta_s:t.eta_s,is_real:t.is_real,bearing:t.bearing||0},
     geometry:{type:'Point',coordinates:[t.lon,t.lat]}
   }))};
 }
@@ -1215,7 +1249,7 @@ function toggleLayer(layer,btn){
   if(layer==='camaras_sct'){map.setLayoutProperty('camaras-sct-circles','visibility',vis);map.setLayoutProperty('camaras-sct-labels','visibility',vis);}
   if(layer==='camaras_bcn'){map.setLayoutProperty('camaras-bcn-circles','visibility',vis);map.setLayoutProperty('camaras-bcn-labels','visibility',vis);}
   if(layer==='metro_trains'){
-    ['metro-trains-halo','metro-trains-dot','metro-trains-label'].forEach(l=>map.setLayoutProperty(l,'visibility',vis));
+    if(map.getLayer('metro-trains-arrow')) map.setLayoutProperty('metro-trains-arrow','visibility',vis);
     if(vis==='visible') startMetroTrainsLoop(); else stopMetroTrainsLoop();
   }
   if(layer==='fonts')map.setLayoutProperty('fonts-circles','visibility',vis);

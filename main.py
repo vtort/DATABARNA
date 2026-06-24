@@ -14,6 +14,7 @@ import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -52,6 +53,7 @@ OCM_KEY = os.environ.get("OCM_KEY", "")
 
 app = FastAPI(title="BCN Live Data")
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -119,14 +121,28 @@ async def load_trams_geo():
         "1090983a-1c40-4609-8620-14ad49aae3ab/resource/"
         "1d6c814c-70ef-4147-aa16-a49ddb952f72/download/transit_relacio_trams.csv"
     )
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(url)
-    reader = csv.DictReader(io.StringIO(r.text))
+    local_path = "static/transit_relacio_trams.csv"
+    text = None
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(url)
+        r.raise_for_status()
+        text = r.text
+        with open(local_path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except Exception as e:
+        print(f"[load_trams_geo] error: {e}")
+        if os.path.exists(local_path):
+            print("[load_trams_geo] usant còpia local")
+            with open(local_path, encoding="utf-8") as f:
+                text = f.read()
+        else:
+            return
+    reader = csv.DictReader(io.StringIO(text))
     for row in reader:
         tid = int(row["Tram"])
         raw = [float(x) for x in row["Coordenades"].split(",")]
         coords = [[raw[i], raw[i + 1]] for i in range(0, len(raw) - 1, 2)]
-        # Centroide del tram
         lons = [c[0] for c in coords]
         lats = [c[1] for c in coords]
         trams_geo[tid] = {
@@ -594,6 +610,8 @@ async def camaras_dgt_loop():
 
 async def polling_loop():
     while True:
+        if not trams_geo:
+            await load_trams_geo()
         try:
             await asyncio.gather(
                 poll_trams(),
@@ -743,8 +761,12 @@ async def poll_poblacio():
     """Densitat de població per secció censal — INE Padró 2025 + BCN geometries."""
     geo_url = "https://opendata-ajuntament.barcelona.cat/data/dataset/808daafa-d9ce-48c0-925a-fa5afdb1ed41/resource/db90a207-d125-4f80-aac5-f9d5d6e648f5/download"
     pop_url = "https://opendata-ajuntament.barcelona.cat/data/dataset/16c11ddf-a783-4b64-aa68-3dc83dc70379/resource/c3e2f76d-8397-4316-9353-deb41154b495/download"
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-        geo_r, pop_r = await asyncio.gather(client.get(geo_url), client.get(pop_url))
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            geo_r, pop_r = await asyncio.gather(client.get(geo_url), client.get(pop_url))
+    except Exception as e:
+        print(f"[poll_poblacio] fetch error: {e}")
+        return
 
     def _load(r, local_path):
         if r.status_code == 200:
@@ -1109,12 +1131,16 @@ async def poll_mercats():
 
 
 async def slow_poll_loop():
-    """Datos que cambian poco: barcos (cada 6h), playas (cada 6h)."""
+    """Datos que cambian poco: cada 6h."""
     while True:
         try:
-            await asyncio.gather(poll_ships(), poll_beaches(), poll_obras(), return_exceptions=True)
+            await asyncio.gather(poll_ships(), poll_beaches(), poll_obras(), poll_accidents(), return_exceptions=True)
         except Exception as e:
             print(f"[slow_poll] error: {e}")
+        try:
+            await poll_poblacio()
+        except Exception as e:
+            print(f"[slow_poll poblacio] error: {e}")
         await asyncio.sleep(21600)
 
 
@@ -1223,11 +1249,16 @@ async def persist_loop():
 
 async def load_bus_stops():
     """Carga todas las paradas de bus TMB una vez al inicio."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(
-            f"https://api.tmb.cat/v1/transit/parades"
-            f"?app_id={TMB_APP_ID}&app_key={TMB_APP_KEY}"
-        )
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(
+                f"https://api.tmb.cat/v1/transit/parades"
+                f"?app_id={TMB_APP_ID}&app_key={TMB_APP_KEY}"
+            )
+        r.raise_for_status()
+    except Exception as e:
+        print(f"[load_bus_stops] error: {e}")
+        return
     stops = []
     for f in r.json().get("features", []):
         p = f["properties"]
@@ -1912,6 +1943,28 @@ def _load_metro_lines():
 _load_metro_lines()
 
 
+def _bearing_at_t(coords: list, t: float) -> float:
+    """Bearing en graus clockwise des de N a la fracció t de la polilínia."""
+    if not coords or len(coords) < 2:
+        return 0.0
+    segs, total = [], 0.0
+    for i in range(len(coords) - 1):
+        d = math.hypot(coords[i+1][0]-coords[i][0], coords[i+1][1]-coords[i][1])
+        segs.append(d)
+        total += d
+    if total == 0:
+        return 0.0
+    target = t * total
+    acc = 0.0
+    for i, d in enumerate(segs):
+        if acc + d >= target or i == len(segs) - 1:
+            dx = coords[i+1][0] - coords[i][0]
+            dy = coords[i+1][1] - coords[i][1]
+            return (math.degrees(math.atan2(dx, dy)) + 360) % 360
+        acc += d
+    return 0.0
+
+
 def _point_on_polyline(coords: list, t: float) -> tuple[float, float]:
     """Interpola un punt a la fracció t [0,1] al llarg d'una polilínia de coords [[lon,lat],...]."""
     if not coords or len(coords) < 2:
@@ -2080,6 +2133,7 @@ async def get_metro_trains():
                         "eta_s": round(eta_s),
                         "is_real": arr["is_real"],
                         "t": round(t_tren, 4),
+                        "bearing": round((_bearing_at_t(coords, t_tren) + (0 if toward_end else 180)) % 360, 1),
                     }
 
         trains.extend(tren_positions.values())
