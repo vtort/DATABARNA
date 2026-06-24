@@ -77,7 +77,8 @@
     <div class="layer-group-header" onclick="this.parentElement.classList.toggle('open')"><span>Transport</span></div>
     <div class="layer-group-body">
       <button class="layer-btn" onclick="toggleLayer('traffic',this)"><span class="layer-dot" style="background:#ef4444"></span>Trànsit</button>
-      <button class="layer-btn" onclick="toggleLayer('metro',this)"><span class="layer-dot" style="background:#a855f7"></span>Metro</button>
+      <button class="layer-btn" onclick="toggleLayer('metro_routes',this)"><span class="layer-dot" style="background:linear-gradient(135deg,#e3000b 33%,#009f6b 66%,#ffcc00);border-radius:2px"></span>Línies metro</button>
+      <button class="layer-btn" onclick="toggleLayer('metro',this)"><span class="layer-dot" style="background:#a855f7"></span>Metro estacions</button>
       <button class="layer-btn" onclick="toggleLayer('metro_trains',this)"><span class="layer-dot" style="background:#fff;border:2px solid #a855f7;border-radius:50%"></span>Trens en viu</button>
       <button class="layer-btn" onclick="toggleLayer('bicing',this)"><span class="layer-dot" style="background:#3b82f6"></span>Bicing</button>
       <button class="layer-btn" onclick="toggleLayer('bus',this)"><span class="layer-dot" style="background:#f59e0b"></span>Bus</button>
@@ -154,7 +155,7 @@
 const API=window.location.hostname==='192.168.1.34'?'http://192.168.1.34:8001':'';
 let map;
 const tooltip=document.getElementById('tooltip');
-const layerState={traffic:false,bicing:false,metro:false,air:false,flights:false,trains:false,bus:false,ships:false,beaches:false,obras:false,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false,soroll3d:false,camaras_dgt:false,camaras_sct:false,camaras_bcn:false,metro_trains:false};
+const layerState={traffic:false,bicing:false,metro:false,metro_routes:false,air:false,flights:false,trains:false,bus:false,ships:false,beaches:false,obras:false,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false,soroll3d:false,camaras_dgt:false,camaras_sct:false,camaras_bcn:false,metro_trains:false};
 
 (async()=>{
   const cfg=await(await fetch(`${API}/api/config`)).json();
@@ -180,6 +181,36 @@ map.on('load',()=>{
   map.addLayer({id:'bicing-labels',type:'symbol',source:'bicing',
     layout:{'text-field':['get','bikes'],'text-size':10,'text-font':['DIN Offc Pro Bold','Arial Unicode MS Bold']},
     paint:{'text-color':'#fff'},minzoom:13});
+
+  // ── Recorreguts metro ──
+  fetch('/static/metro_lines.json').then(r=>r.json()).then(lines=>{
+    const features=Object.values(lines)
+      .filter(l=>l.geometry_coords && l.geometry_coords.length>1)
+      .map(l=>({
+        type:'Feature',
+        properties:{nom:l.nom, color:l.color},
+        geometry:{type:'LineString', coordinates:l.geometry_coords}
+      }));
+    map.addSource('metro_routes',{type:'geojson',data:{type:'FeatureCollection',features}});
+    // Ombra per llegibilitat
+    map.addLayer({id:'metro-routes-shadow',type:'line',source:'metro_routes',
+      layout:{visibility:'none','line-join':'round','line-cap':'round'},
+      paint:{'line-color':'#000','line-width':['interpolate',['linear'],['zoom'],10,5,15,10],'line-opacity':0.3,'line-blur':3}
+    },'metro-circles');
+    // Línia de color
+    map.addLayer({id:'metro-routes-line',type:'line',source:'metro_routes',
+      layout:{visibility:'none','line-join':'round','line-cap':'round'},
+      paint:{'line-color':['get','color'],'line-width':['interpolate',['linear'],['zoom'],10,3,15,7],'line-opacity':0.9}
+    },'metro-circles');
+    // Label de línia al centre (zoom alt)
+    map.addLayer({id:'metro-routes-label',type:'symbol',source:'metro_routes',
+      layout:{visibility:'none','symbol-placement':'line','text-field':['get','nom'],
+        'text-size':11,'text-font':['DIN Offc Pro Bold','Arial Unicode MS Bold'],
+        'text-offset':[0,-0.8],'symbol-spacing':200},
+      paint:{'text-color':['get','color'],'text-halo-color':'#000','text-halo-width':1.5},
+      minzoom:12
+    },'metro-circles');
+  });
 
   // ── Metro ──
   map.addSource('metro',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
@@ -1146,6 +1177,11 @@ function toggleLayer(layer,btn){
   if(layer==='traffic')map.setLayoutProperty('traffic-lines','visibility',vis);
   if(layer==='bicing'){map.setLayoutProperty('bicing-circles','visibility',vis);map.setLayoutProperty('bicing-labels','visibility',vis);}
   if(layer==='metro'){map.setLayoutProperty('metro-circles','visibility',vis);map.setLayoutProperty('metro-labels','visibility',vis);}
+  if(layer==='metro_routes'){
+    ['metro-routes-shadow','metro-routes-line','metro-routes-label'].forEach(l=>{
+      if(map.getLayer(l)) map.setLayoutProperty(l,'visibility',vis);
+    });
+  }
   if(layer==='flights'){map.setLayoutProperty('flights-symbols','visibility',vis);map.setLayoutProperty('flights-labels','visibility',vis);}
   if(layer==='ships'){map.setLayoutProperty('ships-circles','visibility',vis);map.setLayoutProperty('ships-labels','visibility',vis);}
   if(layer==='trains'){map.setLayoutProperty('trains-circles','visibility',vis);map.setLayoutProperty('trains-labels','visibility',vis);}
