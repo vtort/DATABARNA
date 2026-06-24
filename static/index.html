@@ -187,18 +187,18 @@ map.on('load',()=>{
   map.addLayer({id:'metro-routes-shadow',type:'line',source:'metro_routes',
     layout:{visibility:'none','line-join':'round','line-cap':'round'},
     paint:{'line-color':'#000','line-width':['interpolate',['linear'],['zoom'],10,5,15,10],'line-opacity':0.3,'line-blur':3}
-  },'metro-circles');
+  });
   map.addLayer({id:'metro-routes-line',type:'line',source:'metro_routes',
     layout:{visibility:'none','line-join':'round','line-cap':'round'},
     paint:{'line-color':['get','color'],'line-width':['interpolate',['linear'],['zoom'],10,3,15,7],'line-opacity':0.9}
-  },'metro-circles');
+  });
   map.addLayer({id:'metro-routes-label',type:'symbol',source:'metro_routes',
     layout:{visibility:'none','symbol-placement':'line','text-field':['get','nom'],
       'text-size':11,'text-font':['DIN Offc Pro Bold','Arial Unicode MS Bold'],
       'text-offset':[0,-0.8],'symbol-spacing':200},
     paint:{'text-color':['get','color'],'text-halo-color':'#000','text-halo-width':1.5},
     minzoom:12
-  },'metro-circles');
+  });
   fetch('/metro_lines.json').then(r=>r.json()).then(lines=>{
     const features=Object.values(lines)
       .filter(l=>l.geometry_coords && l.geometry_coords.length>1)
