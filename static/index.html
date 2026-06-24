@@ -78,6 +78,7 @@
     <div class="layer-group-body">
       <button class="layer-btn" onclick="toggleLayer('traffic',this)"><span class="layer-dot" style="background:#ef4444"></span>Trànsit</button>
       <button class="layer-btn" onclick="toggleLayer('metro',this)"><span class="layer-dot" style="background:#a855f7"></span>Metro</button>
+      <button class="layer-btn" onclick="toggleLayer('metro_trains',this)"><span class="layer-dot" style="background:#fff;border:2px solid #a855f7;border-radius:50%"></span>Trens en viu</button>
       <button class="layer-btn" onclick="toggleLayer('bicing',this)"><span class="layer-dot" style="background:#3b82f6"></span>Bicing</button>
       <button class="layer-btn" onclick="toggleLayer('bus',this)"><span class="layer-dot" style="background:#f59e0b"></span>Bus</button>
       <button class="layer-btn" onclick="toggleLayer('trains',this)"><span class="layer-dot" style="background:#f87171"></span>Rodalies</button>
@@ -153,7 +154,7 @@
 const API=window.location.hostname==='192.168.1.34'?'http://192.168.1.34:8001':'';
 let map;
 const tooltip=document.getElementById('tooltip');
-const layerState={traffic:false,bicing:false,metro:false,air:false,flights:false,trains:false,bus:false,ships:false,beaches:false,obras:false,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false,soroll3d:false,camaras_dgt:false,camaras_sct:false,camaras_bcn:false};
+const layerState={traffic:false,bicing:false,metro:false,air:false,flights:false,trains:false,bus:false,ships:false,beaches:false,obras:false,arbres:false,accidents:false,edificis:false,poblacio:false,zones_verdes:false,soroll:false,calor:false,carrega:false,fonts:false,desfibril:false,lavabos:false,equipaments:false,mercats:false,airbnb:false,soroll3d:false,camaras_dgt:false,camaras_sct:false,camaras_bcn:false,metro_trains:false};
 
 (async()=>{
   const cfg=await(await fetch(`${API}/api/config`)).json();
@@ -199,6 +200,44 @@ map.on('load',()=>{
     },
     paint:{'text-color':'#ccc','text-halo-color':'#000','text-halo-width':1},
     minzoom:13});
+
+  // ── Trens metro en viu ──
+  map.addSource('metro_trains',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'metro-trains-halo',type:'circle',source:'metro_trains',layout:{visibility:'none'},paint:{
+    'circle-radius':10,
+    'circle-color':['get','color'],
+    'circle-opacity':0.18,
+    'circle-blur':1,
+  }});
+  map.addLayer({id:'metro-trains-dot',type:'circle',source:'metro_trains',layout:{visibility:'none'},paint:{
+    'circle-radius':6,
+    'circle-color':['get','color'],
+    'circle-stroke-width':2,
+    'circle-stroke-color':'#fff',
+    'circle-opacity':1,
+  }});
+  map.addLayer({id:'metro-trains-label',type:'symbol',source:'metro_trains',layout:{
+    visibility:'none',
+    'text-field':['get','linia'],
+    'text-size':8,
+    'text-offset':[0,-1.4],
+    'text-anchor':'bottom',
+    'text-allow-overlap':true,
+  },paint:{'text-color':'#fff','text-halo-color':'#000','text-halo-width':1}});
+
+  map.on('click','metro-trains-dot',e=>{
+    const p=e.features[0].properties;
+    new mapboxgl.Popup({closeButton:true,maxWidth:'220px'})
+      .setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(`<div class="metro-popup">
+        <h3 style="color:${p.color}">${p.linia}</h3>
+        <div>→ <strong>${p.desti}</strong></div>
+        <div style="font-size:11px;color:#aaa;margin-top:4px">${p.is_real?'Dades reals':'Teòric'} · ${Math.abs(Math.round(p.eta_s))}s per arribar</div>
+      </div>`)
+      .addTo(map);
+  });
+  map.on('mouseenter','metro-trains-dot',()=>map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','metro-trains-dot',()=>map.getCanvas().style.cursor='');
 
   // ── Vuelos ──
   map.addSource('flights',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
@@ -1034,6 +1073,60 @@ async function fetchMetro(){
   const data=await(await fetch(`${API}/api/metro/stations?geojson=true`)).json();
   map.getSource('metro').setData(data);
 }
+
+// ── Animació trens metro ──────────────────────────────────────────────────────
+let _metroTrains=[];        // snapshot de posicions del backend
+let _metroTrainsRaf=null;   // requestAnimationFrame id
+let _metroTrainsInterval=null;
+let _metroTrainsTs=0;       // timestamp del darrer fetch (ms)
+const METRO_REFRESH_MS=15000; // fetch nou cada 15s
+const METRO_ANIM_SPEED=0.000008; // graus/ms ≈ ~40km/h en equidistant lat/lon
+
+function _trainsToGeoJSON(trains){
+  return {type:'FeatureCollection',features:trains.map(t=>({
+    type:'Feature',
+    properties:{linia:t.linia,color:t.color,desti:t.desti,eta_s:t.eta_s,is_real:t.is_real},
+    geometry:{type:'Point',coordinates:[t.lon,t.lat]}
+  }))};
+}
+
+async function fetchMetroTrains(){
+  try{
+    const d=await(await fetch(`${API}/api/metro/trains`)).json();
+    _metroTrains=d.trains||[];
+    _metroTrainsTs=Date.now();
+    if(layerState.metro_trains) map.getSource('metro_trains').setData(_trainsToGeoJSON(_metroTrains));
+  }catch(e){console.warn('metro trains fetch error',e);}
+}
+
+function _animateMetroTrains(){
+  if(!layerState.metro_trains){_metroTrainsRaf=null;return;}
+  const elapsed=(Date.now()-_metroTrainsTs)/1000; // segons des del darrer fetch
+  // Interpolar cada tren cap a la seva estació destí
+  const animated=_metroTrains.map(t=>{
+    // Moure lleument en la direcció aproximada de moviment
+    // Usem eta_s per saber quant falta: si eta_s=60 i han passat 5s, ara eta_s≈55
+    const remaining=Math.max(0,t.eta_s-elapsed);
+    const fraction=elapsed/(t.eta_s+elapsed+0.001); // [0,1] progrés des del fetch
+    return {...t,
+      lon:t.lon + (t.dlon||0)*fraction,
+      lat:t.lat + (t.dlat||0)*fraction,
+    };
+  });
+  if(map.getSource('metro_trains')) map.getSource('metro_trains').setData(_trainsToGeoJSON(animated));
+  _metroTrainsRaf=requestAnimationFrame(_animateMetroTrains);
+}
+
+function startMetroTrainsLoop(){
+  fetchMetroTrains();
+  _metroTrainsInterval=setInterval(fetchMetroTrains,METRO_REFRESH_MS);
+  _animateMetroTrains();
+}
+function stopMetroTrainsLoop(){
+  clearInterval(_metroTrainsInterval);
+  if(_metroTrainsRaf) cancelAnimationFrame(_metroTrainsRaf);
+  _metroTrainsRaf=null;
+}
 async function fetchAir(){
   const{stations}=await(await fetch(`${API}/api/air`)).json();
   map.getSource('air').setData({type:'FeatureCollection',features:stations.map(s=>({type:'Feature',properties:{no2:s.pollutants?.NO2?.value??0,name:s.name},geometry:{type:'Point',coordinates:[s.lon,s.lat]}}))});
@@ -1091,6 +1184,10 @@ function toggleLayer(layer,btn){
   if(layer==='camaras_dgt'){map.setLayoutProperty('camaras-dgt-circles','visibility',vis);map.setLayoutProperty('camaras-dgt-labels','visibility',vis);}
   if(layer==='camaras_sct'){map.setLayoutProperty('camaras-sct-circles','visibility',vis);map.setLayoutProperty('camaras-sct-labels','visibility',vis);}
   if(layer==='camaras_bcn'){map.setLayoutProperty('camaras-bcn-circles','visibility',vis);map.setLayoutProperty('camaras-bcn-labels','visibility',vis);}
+  if(layer==='metro_trains'){
+    ['metro-trains-halo','metro-trains-dot','metro-trains-label'].forEach(l=>map.setLayoutProperty(l,'visibility',vis));
+    if(vis==='visible') startMetroTrainsLoop(); else stopMetroTrainsLoop();
+  }
   if(layer==='fonts')map.setLayoutProperty('fonts-circles','visibility',vis);
   if(layer==='desfibril')map.setLayoutProperty('desfibril-circles','visibility',vis);
   if(layer==='lavabos')map.setLayoutProperty('lavabos-circles','visibility',vis);

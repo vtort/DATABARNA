@@ -1896,6 +1896,197 @@ async def get_metro_arrivals(codi_estacio: int, codi_linia: Optional[int] = None
     return {"codi_estacio": codi_estacio, "updated": now_iso(), "arrivals": result}
 
 
+# ── Metro train positions ─────────────────────────────────────────────────────
+
+_METRO_LINES: dict = {}
+
+def _load_metro_lines():
+    global _METRO_LINES
+    path = os.path.join(os.path.dirname(__file__), "static", "metro_lines.json")
+    try:
+        with open(path) as f:
+            _METRO_LINES = json.load(f)
+    except Exception as e:
+        print(f"[metro_trains] no s'ha pogut carregar metro_lines.json: {e}")
+
+_load_metro_lines()
+
+
+def _point_on_polyline(coords: list, t: float) -> tuple[float, float]:
+    """Interpola un punt a la fracció t [0,1] al llarg d'una polilínia de coords [[lon,lat],...]."""
+    if not coords or len(coords) < 2:
+        return coords[0] if coords else (0, 0)
+    # Calcular longitud total
+    segs = []
+    total = 0.0
+    for i in range(len(coords) - 1):
+        dx = coords[i+1][0] - coords[i][0]
+        dy = coords[i+1][1] - coords[i][1]
+        d = math.hypot(dx, dy)
+        segs.append(d)
+        total += d
+    if total == 0:
+        return tuple(coords[0])
+    target = t * total
+    acc = 0.0
+    for i, d in enumerate(segs):
+        if acc + d >= target or i == len(segs) - 1:
+            frac = (target - acc) / d if d > 0 else 0
+            lon = coords[i][0] + frac * (coords[i+1][0] - coords[i][0])
+            lat = coords[i][1] + frac * (coords[i+1][1] - coords[i][1])
+            return lon, lat
+        acc += d
+    return tuple(coords[-1])
+
+
+def _nearest_t_for_station(coords: list, slon: float, slat: float) -> float:
+    """Troba la fracció t de la polilínia més propera a les coords d'una estació."""
+    if not coords:
+        return 0.0
+    segs_len = []
+    total = 0.0
+    for i in range(len(coords) - 1):
+        d = math.hypot(coords[i+1][0]-coords[i][0], coords[i+1][1]-coords[i][1])
+        segs_len.append(d)
+        total += d
+    if total == 0:
+        return 0.0
+    best_t = 0.0
+    best_dist = float("inf")
+    acc = 0.0
+    for i, d in enumerate(segs_len):
+        # Projecció del punt sobre el segment
+        ax, ay = coords[i]
+        bx, by = coords[i+1]
+        px, py = slon, slat
+        abx, aby = bx - ax, by - ay
+        apx, apy = px - ax, py - ay
+        ab2 = abx*abx + aby*aby
+        frac = max(0.0, min(1.0, (apx*abx + apy*aby) / ab2)) if ab2 > 0 else 0.0
+        cx, cy = ax + frac*abx, ay + frac*aby
+        dist = math.hypot(px-cx, py-cy)
+        if dist < best_dist:
+            best_dist = dist
+            best_t = (acc + frac * d) / total
+        acc += d
+    return best_t
+
+
+@app.get("/api/metro/trains")
+async def get_metro_trains():
+    """
+    Posicions aproximades dels trens de metro en temps real.
+    Interpola entre estacions basant-se en ETAs i geometria real de les vies.
+    """
+    if not _METRO_LINES:
+        return {"trains": [], "updated": now_iso(), "error": "metro_lines.json no carregat"}
+
+    stations = cache["metro_stations"]["data"]
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000
+
+    # Buscar ETAs de totes les estacions en paral·lel
+    async def fetch_station(codi: int):
+        url = (f"https://api.tmb.cat/v1/itransit/metro/estacions/{codi}"
+               f"?app_id={TMB_INT_APP_ID}&app_key={TMB_INT_APP_KEY}&temps_teoric=true")
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                r = await client.get(url)
+            if r.status_code != 200:
+                return codi, []
+            arrivals = []
+            for linia in r.json().get("linies", []):
+                for via in linia.get("estacions", []):
+                    for traj in via.get("linies_trajectes", []):
+                        for t in traj.get("propers_trens", [])[:2]:
+                            wait_s = (t["temps_arribada"] - now_ms) / 1000
+                            if -30 < wait_s < 1200:
+                                arrivals.append({
+                                    "linia": traj["nom_linia"],
+                                    "desti": traj["desti_trajecte"],
+                                    "servei": t.get("codi_servei"),
+                                    "eta_s": wait_s,
+                                    "is_real": not t.get("temps_teoric", False),
+                                })
+            return codi, arrivals
+        except Exception:
+            return codi, []
+
+    tasks = [fetch_station(s["codi_estacio"]) for s in stations]
+    results = await asyncio.gather(*tasks)
+    station_etas: dict[int, list] = {codi: arr for codi, arr in results}
+
+    # Per cada línia, calcular posicions de trens
+    trains = []
+    for nom_linia, line_data in _METRO_LINES.items():
+        coords = line_data.get("geometry_coords", [])
+        ordered_stations = line_data.get("stations", [])
+        color = line_data.get("color", "#888")
+        if not coords or not ordered_stations:
+            continue
+
+        # Mapeig codi_estacio → t (fracció a la polilínia)
+        st_t = {}
+        for st in ordered_stations:
+            t = _nearest_t_for_station(coords, st["lon"], st["lat"])
+            st_t[st["codi"]] = t
+
+        # t de la primera i última estació per determinar sentit de la geometria
+        t_first = st_t.get(ordered_stations[0]["codi"], 0.0)
+        t_last = st_t.get(ordered_stations[-1]["codi"], 1.0)
+        nom_desti = ordered_stations[-1]["nom"]   # última estació = terminus "desti"
+        nom_origen = ordered_stations[0]["nom"]   # primera estació = terminus "origen"
+
+        # temps inter-estació basat en distància real de la geometria
+        n_st = len(ordered_stations)
+        avg_inter_s = 90.0  # ~90s entre estacions (aprox. 40 km/h)
+        total_s = n_st * avg_inter_s
+
+        tren_positions: dict[str, dict] = {}
+        for st in ordered_stations:
+            codi = st["codi"]
+            t_st = st_t.get(codi, 0.0)
+            etas = station_etas.get(codi, [])
+            for arr in etas:
+                if arr["linia"] != nom_linia:
+                    continue
+                eta_s = arr["eta_s"]
+                servei = arr.get("servei") or arr["desti"]
+                key = f"{nom_linia}_{servei}_{arr['desti']}"
+                delta_t = (eta_s / total_s) * abs(t_last - t_first)
+
+                # Sentit: si el destí del tren és el terminus final de la línia,
+                # el tren va cap a t_last (creixent si t_last>t_first)
+                desti = arr["desti"]
+                toward_end = any(d in desti for d in [nom_desti, line_data.get("desti","")]) \
+                             and not any(d in desti for d in [nom_origen, line_data.get("origen","")])
+
+                if t_last > t_first:
+                    # geometria: t creix d'origen a desti
+                    t_tren = max(0.0, min(1.0, t_st - delta_t)) if toward_end \
+                             else max(0.0, min(1.0, t_st + delta_t))
+                else:
+                    # geometria inversa (no hauria de passar, però per seguretat)
+                    t_tren = max(0.0, min(1.0, t_st + delta_t)) if toward_end \
+                             else max(0.0, min(1.0, t_st - delta_t))
+
+                if key not in tren_positions or tren_positions[key]["is_real"] < arr["is_real"]:
+                    lon, lat = _point_on_polyline(coords, t_tren)
+                    tren_positions[key] = {
+                        "linia": nom_linia,
+                        "color": color,
+                        "desti": desti,
+                        "lon": round(lon, 6),
+                        "lat": round(lat, 6),
+                        "eta_s": round(eta_s),
+                        "is_real": arr["is_real"],
+                        "t": round(t_tren, 4),
+                    }
+
+        trains.extend(tren_positions.values())
+
+    return {"trains": trains, "count": len(trains), "updated": now_iso()}
+
+
 WMO_CODES = {
     0:"Cel clar",1:"Principalment clar",2:"Parcialment ennuvolat",3:"Ennuvolat",
     45:"Boira",48:"Boira amb gebre",51:"Plugim lleuger",53:"Plugim moderat",55:"Plugim dens",
